@@ -18,7 +18,7 @@ class AuthController extends Controller
             'lastname' => 'nullable|string|max:255',
             'email' => 'required|string|email|max:255|unique:users',
             'phone' => 'nullable|string|max:20',
-            'role' => 'nullable|in:admin,barber,receptionist,client',
+            'role' => 'required|in:admin,barber,receptionist,client',
             'password' => 'required|string|min:8',
         ]);
 
@@ -39,12 +39,11 @@ class AuthController extends Controller
 
         return response()
             ->json([
-                'data' => $user, 
-                'access_token' => $token, 
+                'data' => $user,
+                'access_token' => $token,
                 'token_type' => 'Bearer',
-                ]);
+            ]);
     }
-
     public function login(Request $request)
     {
         if (!Auth::attempt($request->only('email', 'password'))) {
@@ -58,10 +57,10 @@ class AuthController extends Controller
 
         return response()
             ->json([
-                'accessToken' => $token, 
+                'accessToken' => $token,
                 'token_type' => 'Bearer',
                 'user' => $user,
-                ]);
+            ]);
     }
 
     public function logout()
