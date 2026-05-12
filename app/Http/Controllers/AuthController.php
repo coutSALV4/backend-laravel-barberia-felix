@@ -15,7 +15,10 @@ class AuthController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
+            'lastname' => 'nullable|string|max:255',
             'email' => 'required|string|email|max:255|unique:users',
+            'phone' => 'nullable|string|max:20',
+            'role' => 'nullable|in:admin,barber,receptionist,client',
             'password' => 'required|string|min:8',
         ]);
 
@@ -25,7 +28,10 @@ class AuthController extends Controller
 
         $user = User::create([
             'name' => $request->name,
+            'lastname' => $request->lastname,
             'email' => $request->email,
+            'phone' => $request->phone,
+            'role' => $request->role,
             'password' => Hash::make($request->password),
         ]);
 
