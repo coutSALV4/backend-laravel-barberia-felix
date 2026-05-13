@@ -40,7 +40,7 @@ class AuthController extends Controller
         ]);
 
         return response()->json([
-            'message' => 'usuario creado con contraseña por defecto "' . self::DEFAULT_PASSWORD . '".',
+            'message' => 'usuario creado con contraseña por defecto ' . self::DEFAULT_PASSWORD . '.',
             'data'    => new UserResource($user),
         ], Response::HTTP_CREATED);
     }
