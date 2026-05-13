@@ -27,7 +27,7 @@ Authorization: Bearer {token}
     "role": "barber"
 }
 ```
-> `role` acepta: `admin`, `barber`, `receptionist`, `client`
+> `role` acepta: `admin`, `barber`, `receptionist`, `client`.
 > `lastname` y `phone` son opcionales
 
 **Respuesta exitosa — 201:**
