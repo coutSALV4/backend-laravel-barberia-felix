@@ -11,4 +11,5 @@ Route::get('services', [ServiceController::class, 'index']);
 
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('logout', [AuthController::class, 'logout']);
+    Route::post('change-password', [AuthController::class, 'changePassword']);
 });
