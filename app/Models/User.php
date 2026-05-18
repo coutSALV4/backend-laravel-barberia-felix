@@ -18,6 +18,8 @@ class User extends Authenticatable
     /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, Notifiable;
 
+    public const DEFAULT_PASSWORD = '12345678';
+
     /**
      * Get the attributes that should be cast.
      *
