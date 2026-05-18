@@ -33,24 +33,72 @@ Authorization: Bearer {token}
 **Respuesta exitosa — 201:**
 ```json
 {
-    "message": "usuario creado con contraseña por defecto \"12345678\".",
+    "success": true
+    "message": "usuario creado con contraseña por defecto 12345678.",
     "data": {
         "id": 1,
         "name": "Juan",
         "lastname": "Pérez",
         "email": "juan@email.com",
         "phone": "1234567890",
-        "role": "barber",
-        "created_at": "2024-01-01T00:00:00Z"
+        "role": "barber"
     }
 }
 ```
 
 **Errores posibles:**
-| Código | Motivo |
-|--------|--------|
-| 401 | No enviaste el token o no eres admin |
-| 422 | Falta un campo obligatorio o el email ya existe |
+| Código | Motivo                                          |Respuesta  |
+|--------|-------------------------------------------------|-----------|
+| 401    | No enviaste el token                            | Fig. 1    |
+| 403    | No eres admin                                   | Fig. 2    |
+| 422    | Falta un campo obligatorio o el email ya existe | Fig. 3, 4 |
+
+Fig. 1
+
+```json
+{
+  "message": "Unauthenticated."
+}
+```
+
+Fig. 2
+
+```json
+{
+  "success": false,
+  "message": "No tienes permiso para crear usuarios."
+}
+```
+
+Fig. 3
+
+```json
+{
+  "errors": {
+    "name": [
+      "The name field is required."
+    ],
+    "email": [
+      "The email field is required."
+    ],
+    "role": [
+      "The role field is required."
+    ]
+  }
+}
+```
+
+Fig. 4
+
+```json
+{
+  "errors": {
+    "email": [
+      "The email has already been taken."
+    ]
+  }
+}
+```
 
 ---
 
@@ -87,11 +135,44 @@ POST /login
 > ⚠️ Si `must_change_password` es `true`, redirige al usuario a la pantalla de cambio de contraseña antes de dejarlo usar la app. Guarda el `access_token` para usarlo en las demás peticiones.
 
 **Errores posibles:**
-| Código | Motivo |
-|--------|--------|
-| 401 | Email o contraseña incorrectos |
-| 422 | Falta email o contraseña en el body |
-| 429 | Demasiados intentos fallidos, espera unos segundos |
+| Código | Motivo                                          | Respuesta |
+|--------|-------------------------------------------------|-----------|
+| 401 | Email o contraseña incorrectos                     | Fig. 1    |
+| 422 | Falta email o contraseña en el body                | Fig. 2    |
+| 429 | Demasiados intentos fallidos, espera unos segundos | Fig. 3    |
+
+Fig. 1
+
+```json
+{
+  "success": false,
+  "message": "Credenciales inválidas."
+}
+```
+
+Fig. 2
+
+```json
+{
+  "errors": {
+    "email": [
+      "The email field is required."
+    ],
+    "password": [
+      "The password field is required."
+    ]
+  }
+}
+```
+
+Fig. 3
+
+```json
+{
+  "success": false,
+  "message": "Demasiados intentos de inicio de sesión. Inténtalo de nuevo en 60 segundos."
+}
+```
 
 ---
 
@@ -124,11 +205,31 @@ Authorization: Bearer {token}
 > ⚠️ Cuando recibas esta respuesta, elimina el token guardado y manda al usuario al login. El token anterior ya no sirve.
 
 **Errores posibles:**
-| Código | Motivo |
-|--------|--------|
-| 401 | No enviaste el token |
-| 422 | La contraseña actual es incorrecta o la nueva no cumple los requisitos |
+| Código | Motivo                                                                 | Respuesta |
+|--------|------------------------------------------------------------------------|-----------|
+| 401    | No enviaste el token                                                   | Fig. 1    |
+| 422    | La contraseña actual es incorrecta o la nueva no cumple los requisitos | Fig. 2    |
 
+Fig. 1
+
+```json
+{
+  "message": "Unauthenticated."
+}
+```
+
+Fig. 2
+
+```json
+{
+  "errors": {
+    "new_password": [
+      "The new password field confirmation does not match.",
+      "The new password field format is invalid."
+    ]
+  }
+}
+```
 ---
 
 ## 4. Logout
@@ -148,9 +249,17 @@ Authorization: Bearer {token}
 > ⚠️ Cuando recibas esta respuesta, elimina el token guardado y redirige al login.
 
 **Errores posibles:**
-| Código | Motivo |
-|--------|--------|
-| 401 | No enviaste el token o ya estaba expirado |
+| Código | Motivo                                    | Respuesta |
+|--------|-------------------------------------------|-----------|
+| 401    | No enviaste el token o ya estaba expirado | Fig. 1    |
+
+Fig. 1
+
+```json
+{
+  "message": "Unauthenticated."
+}
+```
 
 ---
 
