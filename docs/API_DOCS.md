@@ -131,8 +131,8 @@ POST /login
     }
 }
 ```
-
-> ⚠️ Si `must_change_password` es `true`, redirige al usuario a la pantalla de cambio de contraseña antes de dejarlo usar la app. Guarda el `access_token` para usarlo en las demás peticiones.
+> [!IMPORTANT]
+>Si `must_change_password` es `true`, redirige al usuario a la pantalla de cambio de contraseña antes de dejarlo usar la app. Guarda el `access_token` para usarlo en las demás peticiones.
 
 **Errores posibles:**
 | Código | Motivo                                          | Respuesta |
@@ -201,8 +201,8 @@ Authorization: Bearer {token}
     "message": "Contraseña actualizada correctamente. Por favor, inicie sesión de nuevo."
 }
 ```
-
-> ⚠️ Cuando recibas esta respuesta, elimina el token guardado y manda al usuario al login. El token anterior ya no sirve.
+> [!IMPORTANT]
+>Cuando recibas esta respuesta, elimina el token guardado y manda al usuario al login. El token anterior ya no sirve.
 
 **Errores posibles:**
 | Código | Motivo                                                                 | Respuesta |
@@ -245,8 +245,8 @@ Authorization: Bearer {token}
     "message": "Cierre de sesión exitoso."
 }
 ```
-
-> ⚠️ Cuando recibas esta respuesta, elimina el token guardado y redirige al login.
+> [!IMPORTANT]
+>Cuando recibas esta respuesta, elimina el token guardado y redirige al login.
 
 **Errores posibles:**
 | Código | Motivo                                    | Respuesta |
