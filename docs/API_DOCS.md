@@ -119,6 +119,7 @@ POST /login
 **Respuesta exitosa — 200:**
 ```json
 {
+    "success": true
     "message": "Inicio de sesión exitoso.",
     "access_token": "1|abc123...",
     "token_type": "Bearer",
@@ -126,6 +127,7 @@ POST /login
     "user": {
         "id": 1,
         "name": "Juan",
+        "lastname": "Pérez",
         "email": "juan@email.com",
         "role": "barber"
     }

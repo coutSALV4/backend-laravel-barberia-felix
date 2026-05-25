@@ -3,7 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\Auth\LoginRequest;
-use App\Http\Requests\Auth\RegisterRequest;
+use App\Http\Requests\Auth\UserRequest;
 use App\Http\Requests\Auth\PasswordRequest;
 use App\Http\Resources\UserResource;
 use App\Models\User;
@@ -22,7 +22,7 @@ class AuthController extends Controller
         private ApiResponse $apiResponse
         ) {}
 
-    public function register(RegisterRequest $request): JsonResponse
+    public function register(UserRequest $request): JsonResponse
     {
         if (!auth()->check() || auth()->user()->role !== 'admin') 
             return $this->apiResponse->error('No tienes permiso para crear usuarios.', Response::HTTP_FORBIDDEN);

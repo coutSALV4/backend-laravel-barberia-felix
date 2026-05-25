@@ -6,6 +6,23 @@ use Illuminate\Support\Facades\Log;
 
 class LoggerService
 {
+    public function index(): void
+    {
+        Log::info("index method called in " . __CLASS__);
+    }
+
+    public function update($id): void
+    {
+        Log::info("update method called in " . __CLASS__, 
+        ['user_id' => $id]);
+    }
+
+    public function destroy($id): void
+    {
+        Log::info("destroy method called in " . __CLASS__, 
+        ['user_id' => $id]);
+    }
+
     public function userCreatedByAdmin($user): void
     {
         Log::info('User created by admin', [
