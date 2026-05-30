@@ -16,7 +16,7 @@ class UserService
             $query->where('role', $role);
         }
 
-        return $query->get();
+        return $query->paginate(10); 
     }
 
     public function getUserById($id)
@@ -28,12 +28,6 @@ class UserService
     {
         $user->update($data);
         return $user;
-    }
-
-    public function deleteUser(User $user)
-    {
-        $user->delete();
-        return true;
     }
 
 }
