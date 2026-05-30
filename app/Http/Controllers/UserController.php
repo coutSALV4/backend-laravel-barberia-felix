@@ -4,8 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Services\ApiResponse;
 use App\Services\UserService;
-use App\Services\LoggerService;
 use Illuminate\Http\Request;
+use App\Models\User;
 use App\Http\Requests\Auth\UserRequest;
 use App\Http\Resources\UserResource;
 use Symfony\Component\HttpFoundation\Response;
@@ -14,7 +14,6 @@ class UserController extends Controller
 {
     public function __construct(
         private UserService $service, 
-        private LoggerService $loggerService, 
         private ApiResponse $apiResponse,
         ) {}
 
@@ -22,8 +21,6 @@ class UserController extends Controller
     {
         $role = $request->query('role');
         $users = $this->service->getAllUsers($role);
-        $this->loggerService->index();
-
         return $this->apiResponse->success(
             UserResource::collection($users), 
             'Usuarios obtenidos exitosamente', 
@@ -34,7 +31,6 @@ class UserController extends Controller
     {
         $user = $this->service->getUserById($id);
         $updatedUser = $this->service->updateUser($user, $request->validated());
-        $this->loggerService->update($id);
 
         return $this->apiResponse->success(
             new UserResource($updatedUser), 
@@ -42,14 +38,12 @@ class UserController extends Controller
             Response::HTTP_OK);
     }
 
-    public function destroy(int $id)
+    public function destroy(User $id)
     {
         if (!auth()->check() || auth()->user()->role !== 'admin') 
             return $this->apiResponse->error('No tienes permiso para eliminar usuarios.', Response::HTTP_FORBIDDEN);
 
-        $user = $this->service->getUserById($id);
-        $this->service->deleteUser($user);
-        $this->loggerService->destroy($id);
+        $id->delete();
         return $this->apiResponse->success(
             null, 
             'Usuario eliminado exitosamente', 
