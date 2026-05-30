@@ -2,66 +2,62 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\Service\StoreServiceRequest;
+use App\Http\Resources\ServiceResource;
 use App\Models\Service;
-use Illuminate\Http\Request;
+use App\Services\ApiResponse;
+use App\Services\LoggerService;
+use Illuminate\Http\JsonResponse;
+use Symfony\Component\HttpFoundation\Response;
 
 class ServiceController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
-    public function index()
-    {
-        $services = Service::all();
+    public function __construct(
+        private ApiResponse $apiResponse,
+    ) {}
 
-        return $services;
+    public function index(): JsonResponse
+    {
+        $services = Service::active()->get();
+        return $this->apiResponse->success(
+            ServiceResource::collection($services),
+            'Servicios obtenidos exitosamente',
+            Response::HTTP_OK
+        );
     }
 
-    /**
-     * Show the form for creating a new resource.
-     */
-    public function create()
+    public function store(StoreServiceRequest $request): JsonResponse
     {
-        //
+        if (auth()->user()->role !== 'admin')
+            return $this->apiResponse->error('No tienes permiso para crear servicios.', Response::HTTP_FORBIDDEN);
+
+        $service = Service::create($request->validated());
+        return $this->apiResponse->success(
+            new ServiceResource($service),
+            'Servicio creado exitosamente',
+            Response::HTTP_CREATED
+        );
     }
 
-    /**
-     * Store a newly created resource in storage.
-     */
-    public function store(Request $request)
+    public function update(StoreServiceRequest $request, Service $id): JsonResponse
     {
-        //
+        if (auth()->user()->role !== 'admin')
+            return $this->apiResponse->error('No tienes permiso para editar servicios.', Response::HTTP_FORBIDDEN);
+
+        $id->update($request->validated());
+        return $this->apiResponse->success(
+            new ServiceResource($id),
+            'Servicio actualizado exitosamente',
+            Response::HTTP_OK
+        );
     }
 
-    /**
-     * Display the specified resource.
-     */
-    public function show(Service $service)
+    public function destroy(Service $id): JsonResponse
     {
-        //
-    }
+        if (auth()->user()->role !== 'admin')
+            return $this->apiResponse->error('No tienes permiso para eliminar servicios.', Response::HTTP_FORBIDDEN);
 
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit(Service $service)
-    {
-        //
-    }
-
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, Service $service)
-    {
-        //
-    }
-
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(Service $service)
-    {
-        //
+        $id->delete(); // Soft delete
+        return $this->apiResponse->success(null, 'Servicio eliminado exitosamente', Response::HTTP_OK);
     }
 }
