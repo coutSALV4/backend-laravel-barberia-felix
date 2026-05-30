@@ -45,20 +45,49 @@ The content is organized as follows:
 .gitattributes
 .gitignore
 .npmrc
+app/Http/Controllers/AppointmentController.php
 app/Http/Controllers/AuthController.php
 app/Http/Controllers/Controller.php
+app/Http/Controllers/ExpenseController.php
+app/Http/Controllers/FinancialController.php
+app/Http/Controllers/MediaController.php
+app/Http/Controllers/PaymentController.php
 app/Http/Controllers/ServiceController.php
 app/Http/Controllers/UserController.php
+app/Http/Requests/Appoinment/StoreAppointmentRequest.php
+app/Http/Requests/Appoinment/UpdateAppointmentRequest.php
 app/Http/Requests/Auth/LoginRequest.php
 app/Http/Requests/Auth/PasswordRequest.php
 app/Http/Requests/Auth/UserRequest.php
+app/Http/Requests/Expense/StoreExpenseRequest.php
+app/Http/Requests/Media/UploadMediaRequest.php
+app/Http/Requests/Payment/StorePaymentRequest.php
+app/Http/Requests/Service/StoreServiceRequest.php
+app/Http/Resources/AppointmentResource.php
+app/Http/Resources/ExpenseResource.php
+app/Http/Resources/MediaResource.php
+app/Http/Resources/PaymentResource.php
+app/Http/Resources/ServiceResource.php
 app/Http/Resources/UserResource.php
+app/Models/Appointment.php
+app/Models/Expense.php
+app/Models/ExpenseCategory.php
+app/Models/Media.php
+app/Models/Payment.php
 app/Models/Service.php
 app/Models/User.php
+app/Policies/AppointmentPolicy.php
+app/Policies/UserPolicy.php
 app/Providers/AppServiceProvider.php
 app/Services/ApiResponse.php
+app/Services/AppointmentService.php
 app/Services/AuthService.php
+app/Services/ExpenseService.php
+app/Services/FinancialReportService.php
+app/Services/GoogleDriveService.php
 app/Services/LoggerService.php
+app/Services/MediaService.php
+app/Services/PaymentService.php
 app/Services/UserService.php
 artisan
 bootstrap/app.php
@@ -137,77 +166,308 @@ vite.config.js
 <files>
 This section contains the contents of the repository's files.
 
-<file path="app/Http/Controllers/UserController.php">
+<file path="app/Http/Controllers/AppointmentController.php">
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Http\Requests\Appointment\StoreAppointmentRequest;
+use App\Http\Resources\AppointmentResource;
+use App\Models\Appointment;
+use App\Services\ApiResponse;
+use App\Services\AppointmentService;
+use App\Services\LoggerService;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
+
+class AppointmentController extends Controller
+{
+    public function __construct(
+        private AppointmentService $service,
+        private LoggerService      $loggerService,
+        private ApiResponse        $apiResponse,
+    ) {}
+
+    public function index(Request $request): JsonResponse
+    {
+        $appointments = $this->service->getAll($request->only(['date', 'barber_id', 'status']));
+
+        return $this->apiResponse->success(
+            AppointmentResource::collection($appointments),
+            'Citas obtenidas exitosamente',
+            Response::HTTP_OK
+        );
+    }
+
+    public function store(StoreAppointmentRequest $request): JsonResponse
+    {
+        try {
+            $appointment = $this->service->create($request->validated());
+            $this->loggerService->appointmentCreated($appointment);
+
+            return $this->apiResponse->success(
+                new AppointmentResource($appointment),
+                'Cita creada exitosamente',
+                Response::HTTP_CREATED
+            );
+        } catch (\Exception $e) {
+            return $this->apiResponse->error($e->getMessage(), Response::HTTP_CONFLICT);
+        }
+    }
+
+    public function updateStatus(Request $request, Appointment $appointment): JsonResponse
+    {
+        $request->validate([
+            'status' => ['required', 'in:pending,confirmed,in_progress,completed,cancelled,no_show'],
+        ]);
+
+        $appointment = $this->service->updateStatus($appointment, $request->status);
+        $this->loggerService->appointmentStatusChanged($appointment);
+
+        return $this->apiResponse->success(
+            new AppointmentResource($appointment),
+            'Estado de cita actualizado',
+            Response::HTTP_OK
+        );
+    }
+
+    public function destroy(Appointment $appointment): JsonResponse
+    {
+        $appointment->delete(); // Soft delete
+        return $this->apiResponse->success(null, 'Cita cancelada exitosamente', Response::HTTP_OK);
+    }
+}
+</file>
+
+<file path="app/Http/Controllers/ExpenseController.php">
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Http\Requests\Expense\StoreExpenseRequest;
+use App\Http\Resources\ExpenseResource;
+use App\Models\Expense;
+use App\Services\ApiResponse;
+use App\Services\ExpenseService;
+use App\Services\LoggerService;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
+
+class ExpenseController extends Controller
+{
+    public function __construct(
+        private ExpenseService $service,
+        private LoggerService  $loggerService,
+        private ApiResponse    $apiResponse,
+    ) {}
+
+    public function index(Request $request): JsonResponse
+    {
+        if (!in_array(auth()->user()->role, ['admin', 'receptionist']))
+            return $this->apiResponse->error('No tienes permiso para ver gastos.', Response::HTTP_FORBIDDEN);
+
+        $expenses = $this->service->getAll(
+            $request->only(['category_id', 'from', 'to'])
+        );
+
+        return $this->apiResponse->success(
+            ExpenseResource::collection($expenses),
+            'Gastos obtenidos exitosamente',
+            Response::HTTP_OK
+        );
+    }
+
+    public function store(StoreExpenseRequest $request): JsonResponse
+    {
+        if (!in_array(auth()->user()->role, ['admin', 'receptionist']))
+            return $this->apiResponse->error('No tienes permiso para registrar gastos.', Response::HTTP_FORBIDDEN);
+
+        $expense = $this->service->create(
+            $request->validated(),
+            $request->file('receipt')
+        );
+
+        $this->loggerService->expenseRegistered($expense);
+
+        return $this->apiResponse->success(
+            new ExpenseResource($expense->load('category', 'registeredBy')),
+            'Gasto registrado exitosamente',
+            Response::HTTP_CREATED
+        );
+    }
+
+    public function destroy(Expense $expense): JsonResponse
+    {
+        if (auth()->user()->role !== 'admin')
+            return $this->apiResponse->error('No tienes permiso para eliminar gastos.', Response::HTTP_FORBIDDEN);
+
+        $expense->delete();
+
+        return $this->apiResponse->success(null, 'Gasto eliminado exitosamente', Response::HTTP_OK);
+    }
+}
+</file>
+
+<file path="app/Http/Controllers/FinancialController.php">
 <?php
 
 namespace App\Http\Controllers;
 
 use App\Services\ApiResponse;
-use App\Services\UserService;
-use App\Services\LoggerService;
+use App\Services\FinancialReportService;
+use Carbon\Carbon;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use App\Http\Requests\Auth\UserRequest;
-use App\Http\Resources\UserResource;
 use Symfony\Component\HttpFoundation\Response;
 
-class UserController extends Controller
+class FinancialController extends Controller
 {
     public function __construct(
-        private UserService $service, 
-        private LoggerService $loggerService, 
-        private ApiResponse $apiResponse,
-        ) {}
+        private FinancialReportService $service,
+        private ApiResponse            $apiResponse,
+    ) {}
 
-    public function index(Request $request)
+    public function summary(Request $request): JsonResponse
     {
-        $role = $request->query('role');
-        $users = $this->service->getAllUsers($role);
-        $this->loggerService->index();
+        if (auth()->user()->role !== 'admin')
+            return $this->apiResponse->error(
+                'No tienes permiso para ver reportes financieros.',
+                Response::HTTP_FORBIDDEN
+            );
+
+        $request->validate([
+            'from' => ['required', 'date'],
+            'to'   => ['required', 'date', 'after_or_equal:from'],
+        ]);
+
+        $report = $this->service->summary(
+            Carbon::parse($request->from),
+            Carbon::parse($request->to),
+        );
 
         return $this->apiResponse->success(
-            UserResource::collection($users), 
-            'Usuarios obtenidos exitosamente', 
-            Response::HTTP_OK);
-    }
-
-    public function update(UserRequest $request, int $id)
-    {
-        $user = $this->service->getUserById($id);
-        $updatedUser = $this->service->updateUser($user, $request->validated());
-        $this->loggerService->update($id);
-
-        return $this->apiResponse->success(
-            new UserResource($updatedUser), 
-            'Usuario actualizado exitosamente', 
-            Response::HTTP_OK);
-    }
-
-    public function destroy(int $id)
-    {
-        if (!auth()->check() || auth()->user()->role !== 'admin') 
-            return $this->apiResponse->error('No tienes permiso para eliminar usuarios.', Response::HTTP_FORBIDDEN);
-
-        $user = $this->service->getUserById($id);
-        $this->service->deleteUser($user);
-        $this->loggerService->destroy($id);
-        return $this->apiResponse->success(
-            null, 
-            'Usuario eliminado exitosamente', 
-            Response::HTTP_OK);
+            $report,
+            'Reporte financiero generado exitosamente',
+            Response::HTTP_OK
+        );
     }
 }
 </file>
 
-<file path="app/Http/Requests/Auth/UserRequest.php">
+<file path="app/Http/Controllers/MediaController.php">
 <?php
 
-namespace App\Http\Requests\Auth;
+namespace App\Http\Controllers;
+
+use App\Http\Requests\Media\UploadMediaRequest;
+use App\Http\Resources\MediaResource;
+use App\Models\Media;
+use App\Models\User;
+use App\Services\ApiResponse;
+use App\Services\LoggerService;
+use App\Services\MediaService;
+use Illuminate\Http\JsonResponse;
+use Symfony\Component\HttpFoundation\Response;
+
+class MediaController extends Controller
+{
+    public function __construct(
+        private MediaService $service,
+        private LoggerService $loggerService,
+        private ApiResponse $apiResponse,
+    ) {}
+
+    // POST /api/users/{user}/media
+    public function store(UploadMediaRequest $request, User $user): JsonResponse
+    {
+        $media = $this->service->upload(
+            model:      $user,
+            file:       $request->file('file'),
+            collection: $request->collection,
+        );
+
+        return $this->apiResponse->success(
+            new MediaResource($media),
+            'Archivo subido exitosamente.',
+            Response::HTTP_CREATED
+        );
+    }
+
+    // DELETE /api/media/{media}
+    public function destroy(Media $media): JsonResponse
+    {
+        $this->service->delete($media);
+
+        return $this->apiResponse->success(null, 'Archivo eliminado exitosamente.');
+    }
+}
+</file>
+
+<file path="app/Http/Controllers/PaymentController.php">
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Http\Requests\Payment\StorePaymentRequest;
+use App\Http\Resources\PaymentResource;
+use App\Services\ApiResponse;
+use App\Services\LoggerService;
+use App\Services\PaymentService;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
+
+class PaymentController extends Controller
+{
+    public function __construct(
+        private PaymentService $service,
+        private LoggerService  $loggerService,
+        private ApiResponse    $apiResponse,
+    ) {}
+
+    public function index(Request $request): JsonResponse
+    {
+        $payments = $this->service->getAll(
+            $request->only(['appointment_id', 'status', 'method'])
+        );
+
+        return $this->apiResponse->success(
+            PaymentResource::collection($payments),
+            'Pagos obtenidos exitosamente',
+            Response::HTTP_OK
+        );
+    }
+
+    public function store(StorePaymentRequest $request): JsonResponse
+    {
+        try {
+            $payment = $this->service->register($request->validated());
+            $this->loggerService->paymentRegistered($payment);
+
+            return $this->apiResponse->success(
+                new PaymentResource($payment),
+                'Pago registrado exitosamente',
+                Response::HTTP_CREATED
+            );
+        } catch (\Exception $e) {
+            return $this->apiResponse->error($e->getMessage(), Response::HTTP_UNPROCESSABLE_ENTITY);
+        }
+    }
+}
+</file>
+
+<file path="app/Http/Requests/Appoinment/StoreAppointmentRequest.php">
+<?php
+
+namespace App\Http\Requests\Appointment;
 
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
 
-class UserRequest extends FormRequest
+class StoreAppointmentRequest extends FormRequest
 {
     public function authorize(): bool
     {
@@ -217,11 +477,13 @@ class UserRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'name'     => ['required', 'string', 'max:255'],
-            'lastname' => ['nullable', 'string', 'max:255'],
-            'email'    => ['required', 'string', 'email:rfc,dns', 'max:255', 'unique:users'],
-            'phone'    => ['nullable', 'string', 'max:20'],
-            'role'     => ['required', 'in:admin,barber,receptionist,client'],
+            'client_id'        => ['required', 'exists:users,id'],
+            'barber_id'        => ['required', 'exists:users,id', 'different:client_id'],
+            'service_ids'      => ['required', 'array', 'min:1'],
+            'service_ids.*'    => ['exists:services,id'],
+            'appointment_date' => ['required', 'date', 'after_or_equal:today'],
+            'start_time'       => ['required', 'date_format:H:i'],
+            'notes'            => ['nullable', 'string', 'max:500'],
         ];
     }
 
@@ -234,350 +496,972 @@ class UserRequest extends FormRequest
 }
 </file>
 
-<file path="app/Services/UserService.php">
+<file path="app/Http/Requests/Appoinment/UpdateAppointmentRequest.php">
+<?php
+
+namespace App\Http\Requests\Appoinment;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Contracts\Validation\Validator;
+use Illuminate\Http\Exceptions\HttpResponseException;
+
+class UpdateAppointmentRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'barber_id'        => ['sometimes', 'exists:users,id', 'different:client_id'],
+            'service_ids'      => ['sometimes', 'array', 'min:1'],
+            'service_ids.*'    => ['exists:services,id'],
+            'appointment_date' => ['sometimes', 'date', 'after_or_equal:today'],
+            'start_time'       => ['sometimes', 'date_format:H:i'],
+            'notes'            => ['nullable', 'string', 'max:500'],
+        ];
+    }
+
+    protected function failedValidation(Validator $validator): never
+    {
+        throw new HttpResponseException(
+            response()->json(['errors' => $validator->errors()], 422)
+        );
+    }
+}
+</file>
+
+<file path="app/Http/Requests/Expense/StoreExpenseRequest.php">
+<?php
+
+namespace App\Http\Requests\Expense;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Contracts\Validation\Validator;
+use Illuminate\Http\Exceptions\HttpResponseException;
+
+class StoreExpenseRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'category_id'  => ['required', 'exists:expense_categories,id'],
+            'description'  => ['required', 'string', 'max:255'],
+            'amount'       => ['required', 'numeric', 'min:0.01'],
+            'expense_date' => ['required', 'date'],
+            'receipt'      => ['nullable', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:10240'],
+        ];
+    }
+
+    protected function failedValidation(Validator $validator): never
+    {
+        throw new HttpResponseException(
+            response()->json(['errors' => $validator->errors()], 422)
+        );
+    }
+}
+</file>
+
+<file path="app/Http/Requests/Media/UploadMediaRequest.php">
+<?php
+
+namespace App\Http\Requests\Media;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Contracts\Validation\Validator;
+use Illuminate\Http\Exceptions\HttpResponseException;
+
+class UploadMediaRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'file'       => ['required', 'file', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+            'collection' => ['required', 'in:avatar,haircut'],
+        ];
+    }
+
+    // Validación extra: máximo 2 fotos de corte por cliente
+    public function withValidator(Validator $validator): void
+    {
+        $validator->after(function ($v) {
+            $user = $this->route('user'); // el usuario que viene en la URL
+            if ($this->collection === 'haircut') {
+                $count = $user->haircutPhotos()->count();
+                if ($count >= 2) {
+                    $v->errors()->add('file', 'El cliente ya tiene 2 fotos de corte registradas.');
+                }
+            }
+        });
+    }
+
+    protected function failedValidation(Validator $validator): never
+    {
+        throw new HttpResponseException(
+            response()->json(['errors' => $validator->errors()], 422)
+        );
+    }
+}
+</file>
+
+<file path="app/Http/Requests/Payment/StorePaymentRequest.php">
+<?php
+
+namespace App\Http\Requests\Payment;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Contracts\Validation\Validator;
+use Illuminate\Http\Exceptions\HttpResponseException;
+
+class StorePaymentRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'appointment_id' => ['required', 'exists:appointments,id'],
+            'amount'         => ['required', 'numeric', 'min:0.01'],
+            'method'         => ['required', 'in:cash,card,transfer,other'],
+            'reference'      => ['nullable', 'string', 'max:100'],
+            'paid_at'        => ['nullable', 'date'],
+        ];
+    }
+
+    protected function failedValidation(Validator $validator): never
+    {
+        throw new HttpResponseException(
+            response()->json(['errors' => $validator->errors()], 422)
+        );
+    }
+}
+</file>
+
+<file path="app/Http/Requests/Service/StoreServiceRequest.php">
+<?php
+
+namespace App\Http\Requests\Service;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Contracts\Validation\Validator;
+use Illuminate\Http\Exceptions\HttpResponseException;
+
+class StoreServiceRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'name'         => ['required', 'string', 'max:255'],
+            'description'  => ['nullable', 'string'],
+            'price'        => ['required', 'numeric', 'min:0.01'],
+            'duration_min' => ['required', 'integer', 'min:1', 'max:480'],
+            'active'       => ['sometimes', 'boolean'],
+        ];
+    }
+
+    protected function failedValidation(Validator $validator): never
+    {
+        throw new HttpResponseException(
+            response()->json(['errors' => $validator->errors()], 422)
+        );
+    }
+}
+</file>
+
+<file path="app/Http/Resources/AppointmentResource.php">
+<?php
+
+namespace App\Http\Resources;
+
+use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Http\Request;
+
+class AppointmentResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'               => $this->id,
+            'status'           => $this->status,
+            'appointment_date' => $this->appointment_date->toDateString(),
+            'start_time'       => $this->start_time,
+            'end_time'         => $this->end_time,
+            'total_price'      => (float) $this->total_price,
+            'notes'            => $this->notes,
+            'client'           => UserResource::make($this->whenLoaded('client')),
+            'barber'           => UserResource::make($this->whenLoaded('barber')),
+            'services'         => ServiceResource::collection($this->whenLoaded('services')),
+            'payment'          => PaymentResource::make($this->whenLoaded('payment')),
+        ];
+    }
+}
+</file>
+
+<file path="app/Http/Resources/ExpenseResource.php">
+<?php
+
+namespace App\Http\Resources;
+
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\JsonResource;
+
+class ExpenseResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'           => $this->id,
+            'description'  => $this->description,
+            'amount'       => (float) $this->amount,
+            'expense_date' => $this->expense_date->toDateString(),
+            'category'     => $this->whenLoaded('category', fn() => [
+                'id'    => $this->category->id,
+                'name'  => $this->category->name,
+                'color' => $this->category->color,
+            ]),
+            'registered_by' => UserResource::make($this->whenLoaded('registeredBy')),
+            'has_receipt'   => !is_null($this->drive_receipt_id),
+            'created_at'    => $this->created_at->toDateTimeString(),
+        ];
+    }
+}
+</file>
+
+<file path="app/Http/Resources/MediaResource.php">
+<?php
+
+namespace App\Http\Resources;
+
+use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Http\Request;
+
+class MediaResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'         => $this->id,
+            'collection' => $this->collection,
+            'url'        => $this->drive_url,
+            'filename'   => $this->filename,
+            'mime_type'  => $this->mime_type,
+            'size_bytes' => $this->size_bytes,
+            'created_at' => $this->created_at?->toDateTimeString(),
+        ];
+    }
+}
+</file>
+
+<file path="app/Http/Resources/PaymentResource.php">
+<?php
+
+namespace App\Http\Resources;
+
+use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Http\Request;
+
+class PaymentResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'          => $this->id,
+            'amount'      => (float) $this->amount,
+            'method'      => $this->method,
+            'status'      => $this->status,
+            'reference'   => $this->reference,
+            'paid_at'     => $this->paid_at?->toDateTimeString(),
+            'received_by' => UserResource::make($this->whenLoaded('receivedBy')),
+        ];
+    }
+}
+</file>
+
+<file path="app/Http/Resources/ServiceResource.php">
+<?php
+
+namespace App\Http\Resources;
+
+use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Http\Request;
+
+class ServiceResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'           => $this->id,
+            'name'         => $this->name,
+            'description'  => $this->description,
+            'price'        => (float) $this->price,
+            'duration_min' => $this->duration_min,
+            'active'       => $this->active,
+            'price_at_time' => $this->whenPivotLoaded(
+                'appointment_services',
+                fn() => (float) $this->pivot->price_at_time
+            ),
+        ];
+    }
+}
+</file>
+
+<file path="app/Models/Appointment.php">
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\SoftDeletes;
+
+class Appointment extends Model
+{
+    use SoftDeletes;
+
+    protected $fillable = [
+        'client_id',
+        'barber_id',
+        'receptionist_id',
+        'status',
+        'appointment_date',
+        'start_time',
+        'end_time',
+        'notes',
+        'total_price',
+    ];
+
+    protected $casts = [
+        'appointment_date' => 'date',
+        'total_price'      => 'decimal:2',
+    ];
+
+    // ── Relaciones ───────────────────────────────────────────
+
+    public function client(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'client_id');
+    }
+
+    public function barber(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'barber_id');
+    }
+
+    public function receptionist(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'receptionist_id');
+    }
+
+    public function services(): BelongsToMany
+    {
+        return $this->belongsToMany(Service::class, 'appointment_services')
+                    ->withPivot('price_at_time');
+    }
+
+    public function payment(): HasOne
+    {
+        return $this->hasOne(Payment::class);
+    }
+
+    // ── Scopes ───────────────────────────────────────────────
+
+    /** Filtra por fecha exacta */
+    public function scopeForDate($query, $date)
+    {
+        return $query->whereDate('appointment_date', $date);
+    }
+
+    /** Filtra por barbero */
+    public function scopeForBarber($query, int $barberId)
+    {
+        return $query->where('barber_id', $barberId);
+    }
+
+    /** Solo citas activas (no canceladas ni no_show) */
+    public function scopeActive($query)
+    {
+        return $query->whereNotIn('status', ['cancelled', 'no_show']);
+    }
+}
+</file>
+
+<file path="app/Models/Expense.php">
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\SoftDeletes;
+
+class Expense extends Model
+{
+    use SoftDeletes;
+
+    protected $fillable = [
+        'registered_by',
+        'category_id',
+        'description',
+        'amount',
+        'expense_date',
+        'drive_receipt_id',
+    ];
+
+    protected $casts = [
+        'amount'       => 'decimal:2',
+        'expense_date' => 'date',
+    ];
+
+    public function category(): BelongsTo
+    {
+        return $this->belongsTo(ExpenseCategory::class);
+    }
+
+    public function registeredBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'registered_by');
+    }
+}
+</file>
+
+<file path="app/Models/ExpenseCategory.php">
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+
+class ExpenseCategory extends Model
+{
+    protected $fillable = ['name', 'color'];
+
+    public function expenses(): HasMany
+    {
+        return $this->hasMany(Expense::class, 'category_id');
+    }
+}
+</file>
+
+<file path="app/Models/Media.php">
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\MorphTo;
+
+class Media extends Model
+{
+    public $timestamps = false;
+    const UPDATED_AT = null;
+
+    protected $fillable = [
+        'model_type',
+        'model_id',
+        'collection',
+        'drive_file_id',
+        'drive_url',
+        'mime_type',
+        'filename',
+        'size_bytes',
+        'created_at',
+    ];
+
+    protected $casts = [
+        'created_at' => 'datetime',
+    ];
+
+    public function model(): MorphTo
+    {
+        return $this->morphTo();
+    }
+}
+</file>
+
+<file path="app/Models/Payment.php">
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\SoftDeletes;
+
+class Payment extends Model
+{
+    use SoftDeletes;
+
+    protected $fillable = [
+        'appointment_id',
+        'received_by',
+        'amount',
+        'method',
+        'status',
+        'reference',
+        'paid_at',
+    ];
+
+    protected $casts = [
+        'amount'  => 'decimal:2',
+        'paid_at' => 'datetime',
+    ];
+
+    public function appointment(): BelongsTo
+    {
+        return $this->belongsTo(Appointment::class);
+    }
+
+    public function receivedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'received_by');
+    }
+}
+</file>
+
+<file path="app/Policies/AppointmentPolicy.php">
+<?php
+
+namespace App\Policies;
+
+use App\Models\Appointment;
+use App\Models\User;
+
+class AppointmentPolicy
+{
+    /** Admins y recepcionistas ven todas las citas; barberos solo las suyas; clientes solo las suyas */
+    public function viewAny(User $user): bool
+    {
+        return true; // Todos pueden listar; el Service filtra según rol
+    }
+
+    /** Un usuario puede ver la cita si es su cita como cliente, su cita como barbero, o es admin/recepcionista */
+    public function view(User $user, Appointment $appointment): bool
+    {
+        return in_array($user->role, ['admin', 'receptionist'])
+            || $appointment->client_id === $user->id
+            || $appointment->barber_id === $user->id;
+    }
+
+    /** Admins, recepcionistas y clientes pueden crear citas */
+    public function create(User $user): bool
+    {
+        return in_array($user->role, ['admin', 'receptionist', 'client']);
+    }
+
+    /** Admins y recepcionistas pueden actualizar cualquier cita; barberos solo su status */
+    public function update(User $user, Appointment $appointment): bool
+    {
+        return in_array($user->role, ['admin', 'receptionist'])
+            || $appointment->barber_id === $user->id;
+    }
+
+    /** Solo admins y recepcionistas pueden cancelar (soft delete) */
+    public function delete(User $user, Appointment $appointment): bool
+    {
+        return in_array($user->role, ['admin', 'receptionist']);
+    }
+
+    public function restore(User $user, Appointment $appointment): bool
+    {
+        return $user->role === 'admin';
+    }
+
+    public function forceDelete(User $user, Appointment $appointment): bool
+    {
+        return $user->role === 'admin';
+    }
+}
+</file>
+
+<file path="app/Policies/UserPolicy.php">
+<?php
+
+namespace App\Policies;
+
+use App\Models\User;
+
+class UserPolicy
+{
+    /** Admins y recepcionistas pueden listar usuarios */
+    public function viewAny(User $user): bool
+    {
+        return in_array($user->role, ['admin', 'receptionist']);
+    }
+
+    /** Cualquiera puede ver su propio perfil; admins ven todos */
+    public function view(User $user, User $model): bool
+    {
+        return $user->id === $model->id || $user->role === 'admin';
+    }
+
+    /** Solo admins crean usuarios */
+    public function create(User $authUser): bool
+    {
+        return $authUser->role === 'admin';
+    }
+
+    /** Cada usuario puede editarse a sí mismo; admins editan a todos */
+    public function update(User $user, User $model): bool
+    {
+        return $user->id === $model->id || $user->role === 'admin';
+    }
+
+    /** Solo admins eliminan usuarios */
+    public function delete(User $authUser, User $targetUser): bool
+    {
+        return $authUser->role === 'admin' && $authUser->id !== $targetUser->id;
+    }
+
+    public function restore(User $user, User $model): bool
+    {
+        return $user->role === 'admin';
+    }
+
+    public function forceDelete(User $user, User $model): bool
+    {
+        return $user->role === 'admin';
+    }
+}
+</file>
+
+<file path="app/Services/AppointmentService.php">
 <?php
 
 namespace App\Services;
 
-use App\Models\User;
+use App\Models\Appointment;
+use App\Models\Service;
+use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
 
-class UserService
+class AppointmentService
 {
-
-
-    public function getAllUsers(?string $role = null)
+    public function create(array $data): Appointment
     {
-        $query = User::query();
+        // 1. Cargar servicios seleccionados
+        $services   = Service::whereIn('id', $data['service_ids'])->get();
+        $totalMin   = $services->sum('duration_min');
+        $totalPrice = $services->sum('price');
 
-        if ($role) {
-            $query->where('role', $role);
+        // 2. Calcular end_time automáticamente
+        $start   = Carbon::parse($data['start_time']);
+        $endTime = $start->copy()->addMinutes($totalMin)->format('H:i');
+
+        // 3. Verificar que el barbero esté disponible en ese horario
+        $conflict = Appointment::forBarber($data['barber_id'])
+            ->forDate($data['appointment_date'])
+            ->active()
+            ->where(function ($q) use ($data, $endTime) {
+                $q->whereBetween('start_time', [$data['start_time'], $endTime])
+                  ->orWhereBetween('end_time',  [$data['start_time'], $endTime]);
+            })->exists();
+
+        if ($conflict) {
+            throw new \Exception('El barbero no está disponible en ese horario.');
         }
 
-        return $query->get();
+        // 4. Crear todo en una transacción (si algo falla, se revierte todo)
+        return DB::transaction(function () use ($data, $services, $endTime, $totalPrice) {
+            $appointment = Appointment::create([
+                'client_id'        => $data['client_id'],
+                'barber_id'        => $data['barber_id'],
+                'receptionist_id'  => auth()->id(),
+                'appointment_date' => $data['appointment_date'],
+                'start_time'       => $data['start_time'],
+                'end_time'         => $endTime,
+                'notes'            => $data['notes'] ?? null,
+                'total_price'      => $totalPrice,
+                'status'           => 'pending',
+            ]);
+
+            // 5. Adjuntar servicios con el precio histórico del momento
+            $pivot = $services->mapWithKeys(
+                fn($s) => [$s->id => ['price_at_time' => $s->price]]
+            )->toArray();
+
+            $appointment->services()->attach($pivot);
+
+            return $appointment->load('client', 'barber', 'services');
+        });
     }
 
-    public function getUserById($id)
+    public function updateStatus(Appointment $appointment, string $status): Appointment
     {
-        return User::findOrFail($id);
+        $appointment->update(['status' => $status]);
+        return $appointment->fresh(['client', 'barber', 'services']);
     }
 
-    public function updateUser(User $user, array $data)
+    public function getAll(array $filters = [])
     {
-        $user->update($data);
-        return $user;
+        return Appointment::with(['client', 'barber', 'services', 'payment'])
+            ->when($filters['date']      ?? null, fn($q, $d)  => $q->forDate($d))
+            ->when($filters['barber_id'] ?? null, fn($q, $id) => $q->forBarber($id))
+            ->when($filters['status']    ?? null, fn($q, $s)  => $q->where('status', $s))
+            ->paginate(20);
     }
-
-    public function deleteUser(User $user)
-    {
-        $user->delete();
-        return true;
-    }
-
 }
 </file>
 
-<file path="database/migrations/2026_05_22_044819_delete_services_table.php">
+<file path="app/Services/ExpenseService.php">
 <?php
 
-use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
+namespace App\Services;
 
-return new class extends Migration
+use App\Models\Expense;
+
+class ExpenseService
 {
-    /**
-     * Run the migrations.
-     */
-    public function up(): void
+    public function __construct(
+        private GoogleDriveService $drive
+    ) {}
+
+    public function create(array $data, $receiptFile = null): Expense
     {
-        Schema::dropIfExists('services');
+        $driveReceiptId = null;
+
+        // Si viene un archivo de comprobante, subirlo a Drive
+        if ($receiptFile) {
+            $result = $this->drive->upload(
+                file:     $receiptFile,
+                folder:   config('services.google.folder_id'),
+                filename: 'receipt_' . auth()->id() . '_' . time(),
+            );
+            $driveReceiptId = $result['id'];
+        }
+
+        return Expense::create([
+            'registered_by'    => auth()->id(),
+            'category_id'      => $data['category_id'],
+            'description'      => $data['description'],
+            'amount'           => $data['amount'],
+            'expense_date'     => $data['expense_date'],
+            'drive_receipt_id' => $driveReceiptId,
+        ]);
     }
-};
-</file>
 
-<file path="database/migrations/2026_05_22_044913_create_media_table.php">
-<?php
-
-use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
-
-return new class extends Migration
-{
-    /**
-     * Run the migrations.
-     */
-    public function up(): void
-{
-    Schema::create('media', function (Blueprint $table) {
-        $table->id();
-        $table->string('model_type');          
-        $table->unsignedBigInteger('model_id');
-        $table->string('collection');          
-        $table->string('drive_file_id')->unique();
-        $table->string('drive_url');
-        $table->string('mime_type')->nullable();
-        $table->string('filename');
-        $table->unsignedInteger('size_bytes')->nullable();
-        $table->timestamps();
-
-        $table->index(['model_type', 'model_id', 'collection']);
-    });
+    public function getAll(array $filters = [])
+    {
+        return Expense::with(['category', 'registeredBy'])
+            ->when($filters['category_id'] ?? null, fn($q, $id) => $q->where('category_id', $id))
+            ->when($filters['from'] ?? null, fn($q, $d) => $q->whereDate('expense_date', '>=', $d))
+            ->when($filters['to'] ?? null, fn($q, $d) => $q->whereDate('expense_date', '<=', $d))
+            ->orderByDesc('expense_date')
+            ->paginate(20);
+    }
 }
+</file>
 
-public function down(): void
+<file path="app/Services/FinancialReportService.php">
+<?php
+
+namespace App\Services;
+
+use App\Models\Expense;
+use App\Models\Payment;
+use Carbon\Carbon;
+
+class FinancialReportService
 {
-    Schema::dropIfExists('media');
+    public function summary(Carbon $from, Carbon $to): array
+    {
+        // Total de ingresos en el período
+        $income = Payment::whereBetween('paid_at', [$from, $to])
+            ->where('status', 'completed')
+            ->sum('amount');
+
+        // Total de egresos en el período
+        $expenses = Expense::whereBetween('expense_date', [$from, $to])
+            ->sum('amount');
+
+        // Ingresos agrupados por barbero
+        $byBarber = Payment::with('appointment.barber')
+            ->whereBetween('paid_at', [$from, $to])
+            ->where('status', 'completed')
+            ->get()
+            ->groupBy('appointment.barber.name')
+            ->map(fn($payments) => $payments->sum('amount'));
+
+        // Egresos agrupados por categoría
+        $byCategory = Expense::with('category')
+            ->whereBetween('expense_date', [$from, $to])
+            ->get()
+            ->groupBy('category.name')
+            ->map(fn($expenses) => $expenses->sum('amount'));
+
+        return [
+            'period'      => ['from' => $from->toDateString(), 'to' => $to->toDateString()],
+            'income'      => (float) $income,
+            'expenses'    => (float) $expenses,
+            'net_profit'  => (float) ($income - $expenses),
+            'by_barber'   => $byBarber,
+            'by_category' => $byCategory,
+        ];
+    }
 }
-};
 </file>
 
-<file path="database/migrations/2026_05_22_045529_add_deleted_at_to_users_table.php">
+<file path="app/Services/GoogleDriveService.php">
 <?php
 
-use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
+namespace App\Services;
 
-return new class extends Migration
+use Illuminate\Http\UploadedFile;
+
+class GoogleDriveService
 {
     /**
-     * Run the migrations.
+     * Sube un archivo a Google Drive y retorna su ID y URL.
+     *
+     * @return array{id: string, webViewLink: string}
      */
-    public function up(): void
+    public function upload(UploadedFile $file, string $folder, string $filename): array
     {
-        Schema::table('users', function (Blueprint $table) {
-            $table->softDeletes();
-        });
+        // TODO: implementar con la librería google/apiclient
+        // composer require google/apiclient:^2.0
+        //
+        // Ejemplo de flujo:
+        // 1. Autenticarse con las credenciales del .env
+        // 2. Crear el archivo en Drive con el folder indicado
+        // 3. Poner el archivo como de lectura pública (o compartido con el dominio)
+        // 4. Retornar el id y la webViewLink
+
+        throw new \RuntimeException(
+            'GoogleDriveService::upload() no está implementado aún. ' .
+            'Instala google/apiclient y agrega las credenciales en config/services.php'
+        );
     }
 
     /**
-     * Reverse the migrations.
+     * Elimina un archivo de Google Drive por su ID.
      */
-    public function down(): void
+    public function delete(string $fileId): void
     {
-        Schema::table('users', function (Blueprint $table) {
-            $table->dropSoftDeletes();
-        });
+        // TODO: implementar con google/apiclient
+        throw new \RuntimeException(
+            'GoogleDriveService::delete() no está implementado aún.'
+        );
     }
-};
+}
 </file>
 
-<file path="database/migrations/2026_05_22_045703_create_services_table.php">
+<file path="app/Services/MediaService.php">
 <?php
 
-use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
+namespace App\Services;
 
-return new class extends Migration {
-    /**
-     * Run the migrations.
-     */
-    public function up(): void
+use App\Models\Media;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Http\UploadedFile;
+
+class MediaService
+{
+    public function __construct(
+        private GoogleDriveService $drive
+    ) {}
+
+    public function upload(Model $model, UploadedFile $file, string $collection): Media
     {
-        Schema::create('services', function (Blueprint $table) {
-            $table->id();
-            $table->string('name');
-            $table->text('description')->nullable();
-            $table->decimal('price', 10, 2);
-            $table->unsignedSmallInteger('duration_min');  // duración en minutos
-            $table->boolean('active')->default(true);
-            $table->timestamps();
-            $table->softDeletes();
-        });
+        // Si es avatar, eliminar el anterior (solo puede haber 1)
+        if ($collection === 'avatar') {
+            $old = $model->media()->where('collection', 'avatar')->first();
+            if ($old) {
+                $this->drive->delete($old->drive_file_id);
+                $old->delete();
+            }
+        }
+
+        // Subir a Google Drive
+        $result = $this->drive->upload(
+            file:     $file,
+            folder:   config('services.google.folder_id'),
+            filename: "{$collection}_{$model->id}_" . time(),
+        );
+
+        // Guardar la referencia en la base de datos
+        return $model->media()->create([
+            'collection'    => $collection,
+            'drive_file_id' => $result['id'],
+            'drive_url'     => $result['webViewLink'],
+            'mime_type'     => $file->getMimeType(),
+            'filename'      => $file->getClientOriginalName(),
+            'size_bytes'    => $file->getSize(),
+            'created_at'    => now(),
+        ]);
     }
 
-    public function down(): void
+    public function delete(Media $media): void
     {
-        Schema::dropIfExists('services');
+        $this->drive->delete($media->drive_file_id);
+        $media->delete();
     }
-};
+}
 </file>
 
-<file path="database/migrations/2026_05_22_045849_create_appointments_table.php">
+<file path="app/Services/PaymentService.php">
 <?php
 
-use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
+namespace App\Services;
 
-return new class extends Migration {
-    /**
-     * Run the migrations.
-     */
-    public function up(): void
+use App\Models\Appointment;
+use App\Models\Payment;
+
+class PaymentService
+{
+    public function register(array $data): Payment
     {
-        Schema::create('appointments', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('client_id')
-                ->constrained('users')->restrictOnDelete();
-            $table->foreignId('barber_id')
-                ->constrained('users')->restrictOnDelete();
-            $table->foreignId('receptionist_id')
-                ->nullable()
-                ->constrained('users')->nullOnDelete();
-            $table->enum('status', [
-                'pending',
-                'confirmed',
-                'in_progress',
-                'completed',
-                'cancelled',
-                'no_show'
-            ])->default('pending');
-            $table->date('appointment_date');
-            $table->time('start_time');
-            $table->time('end_time');
-            $table->text('notes')->nullable();
-            $table->decimal('total_price', 10, 2)->default(0);
-            $table->timestamps();
-            $table->softDeletes();
+        $appointment = Appointment::findOrFail($data['appointment_id']);
 
-            $table->index(['barber_id', 'appointment_date']);
-            $table->index(['client_id', 'appointment_date']);
-        });
+        $payment = Payment::create([
+            'appointment_id' => $appointment->id,
+            'received_by'    => auth()->id(),
+            'amount'         => $data['amount'],
+            'method'         => $data['method'],
+            'reference'      => $data['reference'] ?? null,
+            'status'         => 'completed',
+            'paid_at'        => $data['paid_at'] ?? now(),
+        ]);
+
+        // Si el pago cubre el total, marcar la cita como completada
+        if ($payment->amount >= $appointment->total_price) {
+            $appointment->update(['status' => 'completed']);
+        }
+
+        return $payment->load('receivedBy', 'appointment');
     }
 
-    public function down(): void
+    public function getAll(array $filters = [])
     {
-        Schema::dropIfExists('appointments');
+        return Payment::with(['appointment.client', 'appointment.barber', 'receivedBy'])
+            ->when($filters['appointment_id'] ?? null, fn($q, $id) => $q->where('appointment_id', $id))
+            ->when($filters['status'] ?? null, fn($q, $s) => $q->where('status', $s))
+            ->when($filters['method'] ?? null, fn($q, $m) => $q->where('method', $m))
+            ->orderByDesc('paid_at')
+            ->paginate(20);
     }
-};
-</file>
-
-<file path="database/migrations/2026_05_22_045904_create_appointment_services_table.php">
-<?php
-
-use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
-
-return new class extends Migration {
-    /**
-     * Run the migrations.
-     */
-    public function up(): void
-    {
-        Schema::create('appointment_services', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('appointment_id')
-                ->constrained()->cascadeOnDelete();
-            $table->foreignId('service_id')
-                ->constrained()->restrictOnDelete();
-            $table->decimal('price_at_time', 10, 2);  // precio histórico
-
-            $table->unique(['appointment_id', 'service_id']);
-        });
-    }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('appointment_services');
-    }
-};
-</file>
-
-<file path="database/migrations/2026_05_22_045920_create_payments_table.php">
-<?php
-
-use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
-
-return new class extends Migration {
-    /**
-     * Run the migrations.
-     */
-    public function up(): void
-    {
-        Schema::create('payments', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('appointment_id')
-                ->constrained()->cascadeOnDelete();
-            $table->foreignId('received_by')
-                ->constrained('users')->restrictOnDelete();
-            $table->decimal('amount', 10, 2);
-            $table->enum('method', ['cash', 'card', 'transfer', 'other'])
-                ->default('cash');
-            $table->enum('status', ['pending', 'completed', 'refunded'])
-                ->default('completed');
-            $table->string('reference')->nullable();  // folio de tarjeta/transferencia
-            $table->timestamp('paid_at')->nullable();
-            $table->timestamps();
-            $table->softDeletes();
-        });
-    }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('payments');
-    }
-};
-</file>
-
-<file path="database/migrations/2026_05_22_045928_create_expense_categories_table.php">
-<?php
-
-use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
-
-return new class extends Migration {
-    /**
-     * Run the migrations.
-     */
-    public function up(): void
-    {
-        Schema::create('expense_categories', function (Blueprint $table) {
-            $table->id();
-            $table->string('name');
-            $table->string('color', 7)->default('#6B7280');  // hex para UI
-            $table->timestamps();
-        });
-    }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('expense_categories');
-    }
-};
-</file>
-
-<file path="database/migrations/2026_05_22_045938_create_expenses_table.php">
-<?php
-
-use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
-
-return new class extends Migration {
-    /**
-     * Run the migrations.
-     */
-    public function up(): void
-    {
-        Schema::create('expenses', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('registered_by')
-                ->constrained('users')->restrictOnDelete();
-            $table->foreignId('category_id')
-                ->constrained('expense_categories')->restrictOnDelete();
-            $table->string('description');
-            $table->decimal('amount', 10, 2);
-            $table->date('expense_date');
-            $table->string('drive_receipt_id')->nullable();  // foto del ticket en Drive
-            $table->timestamps();
-            $table->softDeletes();
-
-            $table->index('expense_date');
-        });
-    }
-
-    public function down(): void
-    {
-        Schema::dropIfExists('expenses');
-    }
-};
+}
 </file>
 
 <file path=".editorconfig">
@@ -734,67 +1618,125 @@ abstract class Controller
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\Service\StoreServiceRequest;
+use App\Http\Resources\ServiceResource;
 use App\Models\Service;
-use Illuminate\Http\Request;
+use App\Services\ApiResponse;
+use App\Services\LoggerService;
+use Illuminate\Http\JsonResponse;
+use Symfony\Component\HttpFoundation\Response;
 
 class ServiceController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     */
-    public function index()
-    {
-        $services = Service::all();
+    public function __construct(
+        private ApiResponse    $apiResponse,
+        private LoggerService  $loggerService,
+    ) {}
 
-        return $services;
+    public function index(): JsonResponse
+    {
+        $services = Service::active()->get();
+        return $this->apiResponse->success(
+            ServiceResource::collection($services),
+            'Servicios obtenidos exitosamente',
+            Response::HTTP_OK
+        );
     }
 
-    /**
-     * Show the form for creating a new resource.
-     */
-    public function create()
+    public function store(StoreServiceRequest $request): JsonResponse
     {
-        //
+        if (auth()->user()->role !== 'admin')
+            return $this->apiResponse->error('No tienes permiso para crear servicios.', Response::HTTP_FORBIDDEN);
+
+        $service = Service::create($request->validated());
+        return $this->apiResponse->success(
+            new ServiceResource($service),
+            'Servicio creado exitosamente',
+            Response::HTTP_CREATED
+        );
     }
 
-    /**
-     * Store a newly created resource in storage.
-     */
-    public function store(Request $request)
+    public function update(StoreServiceRequest $request, Service $service): JsonResponse
     {
-        //
+        if (auth()->user()->role !== 'admin')
+            return $this->apiResponse->error('No tienes permiso para editar servicios.', Response::HTTP_FORBIDDEN);
+
+        $service->update($request->validated());
+        return $this->apiResponse->success(
+            new ServiceResource($service),
+            'Servicio actualizado exitosamente',
+            Response::HTTP_OK
+        );
     }
 
-    /**
-     * Display the specified resource.
-     */
-    public function show(Service $service)
+    public function destroy(Service $service): JsonResponse
     {
-        //
+        if (auth()->user()->role !== 'admin')
+            return $this->apiResponse->error('No tienes permiso para eliminar servicios.', Response::HTTP_FORBIDDEN);
+
+        $service->delete(); // Soft delete
+        return $this->apiResponse->success(null, 'Servicio eliminado exitosamente', Response::HTTP_OK);
+    }
+}
+</file>
+
+<file path="app/Http/Controllers/UserController.php">
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Services\ApiResponse;
+use App\Services\UserService;
+use App\Services\LoggerService;
+use Illuminate\Http\Request;
+use App\Http\Requests\Auth\UserRequest;
+use App\Http\Resources\UserResource;
+use Symfony\Component\HttpFoundation\Response;
+
+class UserController extends Controller
+{
+    public function __construct(
+        private UserService $service, 
+        private LoggerService $loggerService, 
+        private ApiResponse $apiResponse,
+        ) {}
+
+    public function index(Request $request)
+    {
+        $role = $request->query('role');
+        $users = $this->service->getAllUsers($role);
+        $this->loggerService->index();
+
+        return $this->apiResponse->success(
+            UserResource::collection($users), 
+            'Usuarios obtenidos exitosamente', 
+            Response::HTTP_OK);
     }
 
-    /**
-     * Show the form for editing the specified resource.
-     */
-    public function edit(Service $service)
+    public function update(UserRequest $request, int $id)
     {
-        //
+        $user = $this->service->getUserById($id);
+        $updatedUser = $this->service->updateUser($user, $request->validated());
+        $this->loggerService->update($id);
+
+        return $this->apiResponse->success(
+            new UserResource($updatedUser), 
+            'Usuario actualizado exitosamente', 
+            Response::HTTP_OK);
     }
 
-    /**
-     * Update the specified resource in storage.
-     */
-    public function update(Request $request, Service $service)
+    public function destroy(int $id)
     {
-        //
-    }
+        if (!auth()->check() || auth()->user()->role !== 'admin') 
+            return $this->apiResponse->error('No tienes permiso para eliminar usuarios.', Response::HTTP_FORBIDDEN);
 
-    /**
-     * Remove the specified resource from storage.
-     */
-    public function destroy(Service $service)
-    {
-        //
+        $user = $this->service->getUserById($id);
+        $this->service->deleteUser($user);
+        $this->loggerService->destroy($id);
+        return $this->apiResponse->success(
+            null, 
+            'Usuario eliminado exitosamente', 
+            Response::HTTP_OK);
     }
 }
 </file>
@@ -876,10 +1818,37 @@ class PasswordRequest extends FormRequest
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Service extends Model
 {
-    //
+    use SoftDeletes;
+
+    protected $fillable = [
+        'name',
+        'description',
+        'price',
+        'duration_min',
+        'active',
+    ];
+
+    protected $casts = [
+        'price'  => 'decimal:2',
+        'active' => 'boolean',
+    ];
+
+    public function appointments(): BelongsToMany
+    {
+        return $this->belongsToMany(Appointment::class, 'appointment_services')
+                    ->withPivot('price_at_time');
+    }
+
+    // Solo servicios activos para agendar
+    public function scopeActive($query)
+    {
+        return $query->where('active', true);
+    }
 }
 </file>
 
@@ -1061,58 +2030,45 @@ class AuthService
 }
 </file>
 
-<file path="app/Services/LoggerService.php">
+<file path="app/Services/UserService.php">
 <?php
 
 namespace App\Services;
 
-use Illuminate\Support\Facades\Log;
+use App\Models\User;
 
-class LoggerService
+class UserService
 {
-    public function index(): void
+
+
+    public function getAllUsers(?string $role = null)
     {
-        Log::info("index method called in " . __CLASS__);
+        $query = User::query();
+
+        if ($role) {
+            $query->where('role', $role);
+        }
+
+        return $query->paginate(10); 
     }
 
-    public function update($id): void
+    public function getUserById($id)
     {
-        Log::info("update method called in " . __CLASS__, ['user_id' => $id]);
+        return User::findOrFail($id);
     }
 
-    public function destroy($id): void
+    public function updateUser(User $user, array $data)
     {
-        Log::info("destroy method called in " . __CLASS__, ['user_id' => $id]);
+        $user->update($data);
+        return $user;
     }
 
-    public function userCreatedByAdmin($user): void
+    public function deleteUser(User $user)
     {
-        Log::info('User created by admin', [
-            'created_by' => auth()->id(),
-            'new_user_id' => $user->id,
-        ]);
+        $user->delete();
+        return true;
     }
 
-    public function userLoggedIn($user): void
-    {
-        Log::info('User logged in', [
-            'user_id' => $user->id,
-        ]);
-    }
-
-    public function userLoggedOut($user): void
-    {
-        Log::info('User logged out', [
-            'user_id' => $user->id,
-        ]);
-    }
-
-    public function userChangedPassword($user): void
-    {
-        Log::info('User changed password', [
-            'user_id' => $user->id,
-        ]);
-    }
 }
 </file>
 
@@ -2213,6 +3169,13 @@ return [
         ],
     ],
 
+    'google' => [
+        'client_id' => env('GOOGLE_CLIENT_ID'),
+        'client_secret' => env('GOOGLE_CLIENT_SECRET'),
+        'refresh_token' => env('GOOGLE_REFRESH_TOKEN'),
+        'folder_id' => env('GOOGLE_DRIVE_FOLDER_ID'),
+    ],
+
 ];
 </file>
 
@@ -2783,6 +3746,310 @@ return new class extends Migration
         Schema::table('users', function (Blueprint $table) {
             $table->dropColumn('must_change_password');
         });
+    }
+};
+</file>
+
+<file path="database/migrations/2026_05_22_044819_delete_services_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::dropIfExists('services');
+    }
+};
+</file>
+
+<file path="database/migrations/2026_05_22_044913_create_media_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+{
+    Schema::create('media', function (Blueprint $table) {
+        $table->id();
+        $table->string('model_type');          
+        $table->unsignedBigInteger('model_id');
+        $table->string('collection');          
+        $table->string('drive_file_id')->unique();
+        $table->string('drive_url');
+        $table->string('mime_type')->nullable();
+        $table->string('filename');
+        $table->unsignedInteger('size_bytes')->nullable();
+        $table->timestamps();
+
+        $table->index(['model_type', 'model_id', 'collection']);
+    });
+}
+
+public function down(): void
+{
+    Schema::dropIfExists('media');
+}
+};
+</file>
+
+<file path="database/migrations/2026_05_22_045529_add_deleted_at_to_users_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::table('users', function (Blueprint $table) {
+            $table->softDeletes();
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::table('users', function (Blueprint $table) {
+            $table->dropSoftDeletes();
+        });
+    }
+};
+</file>
+
+<file path="database/migrations/2026_05_22_045703_create_services_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('services', function (Blueprint $table) {
+            $table->id();
+            $table->string('name');
+            $table->text('description')->nullable();
+            $table->decimal('price', 10, 2);
+            $table->unsignedSmallInteger('duration_min');  // duración en minutos
+            $table->boolean('active')->default(true);
+            $table->timestamps();
+            $table->softDeletes();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('services');
+    }
+};
+</file>
+
+<file path="database/migrations/2026_05_22_045849_create_appointments_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('appointments', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('client_id')
+                ->constrained('users')->restrictOnDelete();
+            $table->foreignId('barber_id')
+                ->constrained('users')->restrictOnDelete();
+            $table->foreignId('receptionist_id')
+                ->nullable()
+                ->constrained('users')->nullOnDelete();
+            $table->enum('status', [
+                'pending',
+                'confirmed',
+                'in_progress',
+                'completed',
+                'cancelled',
+                'no_show'
+            ])->default('pending');
+            $table->date('appointment_date');
+            $table->time('start_time');
+            $table->time('end_time');
+            $table->text('notes')->nullable();
+            $table->decimal('total_price', 10, 2)->default(0);
+            $table->timestamps();
+            $table->softDeletes();
+
+            $table->index(['barber_id', 'appointment_date']);
+            $table->index(['client_id', 'appointment_date']);
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('appointments');
+    }
+};
+</file>
+
+<file path="database/migrations/2026_05_22_045904_create_appointment_services_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('appointment_services', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('appointment_id')
+                ->constrained()->cascadeOnDelete();
+            $table->foreignId('service_id')
+                ->constrained()->restrictOnDelete();
+            $table->decimal('price_at_time', 10, 2);  // precio histórico
+
+            $table->unique(['appointment_id', 'service_id']);
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('appointment_services');
+    }
+};
+</file>
+
+<file path="database/migrations/2026_05_22_045920_create_payments_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('payments', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('appointment_id')
+                ->constrained()->cascadeOnDelete();
+            $table->foreignId('received_by')
+                ->constrained('users')->restrictOnDelete();
+            $table->decimal('amount', 10, 2);
+            $table->enum('method', ['cash', 'card', 'transfer', 'other'])
+                ->default('cash');
+            $table->enum('status', ['pending', 'completed', 'refunded'])
+                ->default('completed');
+            $table->string('reference')->nullable();  // folio de tarjeta/transferencia
+            $table->timestamp('paid_at')->nullable();
+            $table->timestamps();
+            $table->softDeletes();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('payments');
+    }
+};
+</file>
+
+<file path="database/migrations/2026_05_22_045928_create_expense_categories_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('expense_categories', function (Blueprint $table) {
+            $table->id();
+            $table->string('name');
+            $table->string('color', 7)->default('#6B7280');  // hex para UI
+            $table->timestamps();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('expense_categories');
+    }
+};
+</file>
+
+<file path="database/migrations/2026_05_22_045938_create_expenses_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('expenses', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('registered_by')
+                ->constrained('users')->restrictOnDelete();
+            $table->foreignId('category_id')
+                ->constrained('expense_categories')->restrictOnDelete();
+            $table->string('description');
+            $table->decimal('amount', 10, 2);
+            $table->date('expense_date');
+            $table->string('drive_receipt_id')->nullable();  // foto del ticket en Drive
+            $table->timestamps();
+            $table->softDeletes();
+
+            $table->index('expense_date');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('expenses');
     }
 };
 </file>
@@ -3857,6 +5124,46 @@ export default defineConfig({
 });
 </file>
 
+<file path="app/Http/Requests/Auth/UserRequest.php">
+<?php
+
+namespace App\Http\Requests\Auth;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Contracts\Validation\Validator;
+use Illuminate\Http\Exceptions\HttpResponseException;
+use Illuminate\Validation\Rule;
+
+class UserRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'name' => ['required', 'string', 'max:255'],
+            'lastname' => ['nullable', 'string', 'max:255'],
+            'email' => [
+                'required', 
+                'email:rfc,dns', 
+                'unique:users,email,' . $this->route('id')],
+            'phone' => ['nullable', 'string', 'max:20'],
+            'role' => ['required', 'in:admin,barber,receptionist,client'],
+        ];
+    }
+
+    protected function failedValidation(Validator $validator): never
+    {
+        throw new HttpResponseException(
+            response()->json(['errors' => $validator->errors()], 422)
+        );
+    }
+}
+</file>
+
 <file path="app/Http/Resources/UserResource.php">
 <?php
 
@@ -3870,14 +5177,136 @@ class UserResource extends JsonResource
     public function toArray(Request $request): array
     {
         return [
-            'id'         => $this->id,
-            'name'       => $this->name,
-            'lastname'   => $this->lastname,
-            'email'      => $this->email,
-            'phone'      => $this->phone,
-            'role'       => $this->role,
+            'id'             => $this->id,
+            'name'           => $this->name,
+            'lastname'       => $this->lastname,
+            'email'          => $this->email,
+            'phone'          => $this->phone,
+            'role'           => $this->role,
+            'avatar_url'     => $this->whenLoaded('avatar', fn() => $this->avatar?->drive_url),
+            'haircut_photos' => $this->whenLoaded('haircutPhotos',
+                fn() => MediaResource::collection($this->haircutPhotos)
+            ),
         ];
     }
+}
+</file>
+
+<file path="app/Services/LoggerService.php">
+<?php
+
+namespace App\Services;
+
+use Illuminate\Support\Facades\Log;
+use App\Models\Appointment;
+use App\Models\Payment;
+use App\Models\Expense;
+use App\Models\Media;
+
+class LoggerService
+{
+    public function index(): void
+    {
+        Log::info("index method called in " . __CLASS__);
+    }
+
+    public function update($id): void
+    {
+        Log::info("update method called in " . __CLASS__, [
+            'user_id' => $id
+        ]);
+    }
+
+    public function destroy($id): void
+    {
+        Log::info("destroy method called in " . __CLASS__, [
+            'user_id' => $id
+        ]);
+    }
+
+    public function userCreatedByAdmin($user): void
+    {
+        Log::info('User created by admin', [
+            'created_by' => auth()->id(),
+            'new_user_id' => $user->id,
+        ]);
+    }
+
+    public function userLoggedIn($user): void
+    {
+        Log::info('User logged in', [
+            'user_id' => $user->id,
+        ]);
+    }
+
+    public function userLoggedOut($user): void
+    {
+        Log::info('User logged out', [
+            'user_id' => $user->id,
+        ]);
+    }
+
+    public function userChangedPassword($user): void
+    {
+        Log::info('User changed password', [
+            'user_id' => $user->id,
+        ]);
+    }
+
+    // En LoggerService.php
+
+    public function appointmentCreated(Appointment $appointment): void
+    {
+        Log::info('Appointment created', [
+            'created_by' => auth()->id(),
+            'appointment_id' => $appointment->id,
+            'client_id' => $appointment->client_id,
+            'barber_id' => $appointment->barber_id,
+            'date' => $appointment->appointment_date,
+        ]);
+    }
+
+    public function appointmentStatusChanged(Appointment $appointment): void
+    {
+        Log::info('Appointment status changed', [
+            'changed_by' => auth()->id(),
+            'appointment_id' => $appointment->id,
+            'new_status' => $appointment->status,
+        ]);
+    }
+
+    public function paymentRegistered(Payment $payment): void
+    {
+        Log::info('Payment registered', [
+            'registered_by' => auth()->id(),
+            'payment_id' => $payment->id,
+            'appointment_id' => $payment->appointment_id,
+            'amount' => $payment->amount,
+            'method' => $payment->method,
+        ]);
+    }
+
+    public function expenseRegistered(Expense $expense): void
+    {
+        Log::info('Expense registered', [
+            'registered_by' => auth()->id(),
+            'expense_id' => $expense->id,
+            'amount' => $expense->amount,
+            'category_id' => $expense->category_id,
+        ]);
+    }
+
+    public function mediaUploaded(Media $media): void
+    {
+        Log::info('Media uploaded', [
+            'uploaded_by' => auth()->id(),
+            'media_id' => $media->id,
+            'model_type' => $media->model_type,
+            'model_id' => $media->model_id,
+            'collection' => $media->collection,
+        ]);
+    }
+
 }
 </file>
 
@@ -4118,11 +5547,14 @@ Este proyecto es el backend para la gestión de una barbería, desarrollado con 
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\MorphMany;
+use Illuminate\Database\Eloquent\Relations\MorphOne;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
@@ -4131,16 +5563,10 @@ use Laravel\Sanctum\HasApiTokens;
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
-    /** @use HasFactory<UserFactory> */
-    use HasApiTokens, HasFactory, Notifiable;
+    use HasApiTokens, HasFactory, Notifiable, SoftDeletes;
 
     public const DEFAULT_PASSWORD = '12345678';
 
-    /**
-     * Get the attributes that should be cast.
-     *
-     * @return array<string, string>
-     */
     protected function casts(): array
     {
         return [
@@ -4148,6 +5574,48 @@ class User extends Authenticatable
             'password' => 'hashed',
             'must_change_password' => 'boolean',
         ];
+    }
+
+    public function media(): MorphMany
+    {
+        return $this->morphMany(Media::class, 'model');
+    }
+
+    public function avatar(): MorphOne
+    {
+        return $this->morphOne(Media::class, 'model')
+            ->where('collection', 'avatar');
+    }
+
+    public function haircutPhotos(): MorphMany
+    {
+        return $this->morphMany(Media::class, 'model')
+            ->where('collection', 'haircut');
+    }
+
+    public function appointmentsAsClient(): HasMany
+    {
+        return $this->hasMany(Appointment::class, 'client_id');
+    }
+
+    public function appointmentsAsBarber(): HasMany
+    {
+        return $this->hasMany(Appointment::class, 'barber_id');
+    }
+
+    public function paymentsReceived(): HasMany
+    {
+        return $this->hasMany(Payment::class, 'received_by');
+    }
+
+    public function scopeBarbers($query)
+    {
+        return $query->where('role', 'barber');
+    }
+
+    public function scopeClients($query)
+    {
+        return $query->where('role', 'client');
     }
 }
 </file>
@@ -4438,19 +5906,54 @@ Fig. 1
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\UserController;
+use App\Http\Controllers\ServiceController;
+use App\Http\Controllers\AppointmentController;
+use App\Http\Controllers\PaymentController;
+use App\Http\Controllers\ExpenseController;
+use App\Http\Controllers\FinancialController;
+use App\Http\Controllers\MediaController;
 
 Route::post('login', [AuthController::class, 'login']);
 
 Route::middleware('auth:sanctum')->group(function () {
 
-    Route::post('register', [AuthController::class, 'register']);
-    Route::post('change-password', [AuthController::class, 'changePassword']);
+    // ── Auth ──────────────────────────────────────────────────
+    Route::post('register',         [AuthController::class, 'register']);
+    Route::post('change-password',  [AuthController::class, 'changePassword']);
+    Route::post('logout',           [AuthController::class, 'logout']);
 
-    Route::get('users', [UserController::class, 'index']);
-    Route::put('users/{id}', [UserController::class, 'update']);
-    Route::delete('users/{id}', [UserController::class, 'destroy']);
+    // ── Usuarios ──────────────────────────────────────────────
+    Route::get('users',             [UserController::class, 'index']);
+    Route::put('users/{id}',        [UserController::class, 'update']);
+    Route::delete('users/{id}',     [UserController::class, 'destroy']);
 
-    Route::post('logout', [AuthController::class, 'logout']);
+    // ── Media (fotos de perfil y corte) ───────────────────────
+    Route::post('users/{user}/media',   [MediaController::class, 'store']);
+    Route::delete('media/{media}',      [MediaController::class, 'destroy']);
+
+    // ── Servicios ─────────────────────────────────────────────
+    Route::get('services',              [ServiceController::class, 'index']);
+    Route::post('services',             [ServiceController::class, 'store']);
+    Route::put('services/{service}',    [ServiceController::class, 'update']);
+    Route::delete('services/{service}', [ServiceController::class, 'destroy']);
+
+    // ── Citas ─────────────────────────────────────────────────
+    Route::get('appointments',                              [AppointmentController::class, 'index']);
+    Route::post('appointments',                             [AppointmentController::class, 'store']);
+    Route::patch('appointments/{appointment}/status',       [AppointmentController::class, 'updateStatus']);
+    Route::delete('appointments/{appointment}',             [AppointmentController::class, 'destroy']);
+
+    // ── Pagos ─────────────────────────────────────────────────
+    Route::get('payments',      [PaymentController::class, 'index']);
+    Route::post('payments',     [PaymentController::class, 'store']);
+
+    // ── Gastos ────────────────────────────────────────────────
+    Route::get('expenses',              [ExpenseController::class, 'index']);
+    Route::post('expenses',             [ExpenseController::class, 'store']);
+    Route::delete('expenses/{expense}', [ExpenseController::class, 'destroy']);
+
+    // ── Reporte financiero ────────────────────────────────────
+    Route::get('financial/summary',     [FinancialController::class, 'summary']);
 });
 </file>
 
