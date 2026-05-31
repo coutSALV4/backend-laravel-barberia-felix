@@ -50,29 +50,25 @@ app/Http/Controllers/AuthController.php
 app/Http/Controllers/Controller.php
 app/Http/Controllers/ExpenseController.php
 app/Http/Controllers/FinancialController.php
-app/Http/Controllers/MediaController.php
 app/Http/Controllers/PaymentController.php
 app/Http/Controllers/ServiceController.php
 app/Http/Controllers/UserController.php
-app/Http/Requests/Appoinment/StoreAppointmentRequest.php
-app/Http/Requests/Appoinment/UpdateAppointmentRequest.php
+app/Http/Requests/Appointment/StoreAppointmentRequest.php
+app/Http/Requests/Appointment/UpdateAppointmentRequest.php
 app/Http/Requests/Auth/LoginRequest.php
 app/Http/Requests/Auth/PasswordRequest.php
 app/Http/Requests/Auth/UserRequest.php
 app/Http/Requests/Expense/StoreExpenseRequest.php
-app/Http/Requests/Media/UploadMediaRequest.php
 app/Http/Requests/Payment/StorePaymentRequest.php
 app/Http/Requests/Service/StoreServiceRequest.php
 app/Http/Resources/AppointmentResource.php
 app/Http/Resources/ExpenseResource.php
-app/Http/Resources/MediaResource.php
 app/Http/Resources/PaymentResource.php
 app/Http/Resources/ServiceResource.php
 app/Http/Resources/UserResource.php
 app/Models/Appointment.php
 app/Models/Expense.php
 app/Models/ExpenseCategory.php
-app/Models/Media.php
 app/Models/Payment.php
 app/Models/Service.php
 app/Models/User.php
@@ -84,9 +80,6 @@ app/Services/AppointmentService.php
 app/Services/AuthService.php
 app/Services/ExpenseService.php
 app/Services/FinancialReportService.php
-app/Services/GoogleDriveService.php
-app/Services/LoggerService.php
-app/Services/MediaService.php
 app/Services/PaymentService.php
 app/Services/UserService.php
 artisan
@@ -123,7 +116,13 @@ database/migrations/2026_05_22_045904_create_appointment_services_table.php
 database/migrations/2026_05_22_045920_create_payments_table.php
 database/migrations/2026_05_22_045928_create_expense_categories_table.php
 database/migrations/2026_05_22_045938_create_expenses_table.php
+database/migrations/2026_05_30_020727_delete_media_table.php
+database/migrations/2026_05_30_030811_delete_expenses_table.php
+database/migrations/2026_05_30_030917_create_expenses_table.php
+database/seeders/AdminUserSeeder.php
 database/seeders/DatabaseSeeder.php
+database/seeders/ExpenseCategorySeeder.php
+database/seeders/ServiceSeeder.php
 docs/API_DOCS.md
 lang/en/auth.php
 lang/en/pagination.php
@@ -166,17 +165,87 @@ vite.config.js
 <files>
 This section contains the contents of the repository's files.
 
+<file path=".editorconfig">
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_size = 4
+indent_style = space
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.{yml,yaml}]
+indent_size = 2
+
+[{compose,docker-compose}.{yml,yaml}]
+indent_size = 4
+</file>
+
+<file path=".gitattributes">
+* text=auto eol=lf
+
+*.blade.php diff=html
+*.css diff=css
+*.html diff=html
+*.md diff=markdown
+*.php diff=php
+
+/.github export-ignore
+CHANGELOG.md export-ignore
+.styleci.yml export-ignore
+</file>
+
+<file path=".gitignore">
+*.log
+.DS_Store
+.env
+.env.backup
+.env.production
+.phpactor.json
+.phpunit.result.cache
+/.codex
+/.cursor/
+/.idea
+/.nova
+/.phpunit.cache
+/.vscode
+/.zed
+/auth.json
+/node_modules
+/public/build
+/public/fonts-manifest.dev.json
+/public/hot
+/public/storage
+/storage/*.key
+/storage/pail
+/vendor
+_ide_helper.php
+Homestead.json
+Homestead.yaml
+Thumbs.db
+</file>
+
+<file path=".npmrc">
+ignore-scripts=true
+audit=true
+</file>
+
 <file path="app/Http/Controllers/AppointmentController.php">
 <?php
 
 namespace App\Http\Controllers;
 
 use App\Http\Requests\Appointment\StoreAppointmentRequest;
+use App\Http\Requests\Appoinment\UpdateAppointmentRequest;
 use App\Http\Resources\AppointmentResource;
 use App\Models\Appointment;
 use App\Services\ApiResponse;
 use App\Services\AppointmentService;
-use App\Services\LoggerService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -185,7 +254,6 @@ class AppointmentController extends Controller
 {
     public function __construct(
         private AppointmentService $service,
-        private LoggerService      $loggerService,
         private ApiResponse        $apiResponse,
     ) {}
 
@@ -204,8 +272,6 @@ class AppointmentController extends Controller
     {
         try {
             $appointment = $this->service->create($request->validated());
-            $this->loggerService->appointmentCreated($appointment);
-
             return $this->apiResponse->success(
                 new AppointmentResource($appointment),
                 'Cita creada exitosamente',
@@ -216,14 +282,27 @@ class AppointmentController extends Controller
         }
     }
 
-    public function updateStatus(Request $request, Appointment $appointment): JsonResponse
+    public function update(UpdateAppointmentRequest $request, Appointment $id): JsonResponse
+    {
+        try {
+            $appointment = $this->service->update($id, $request->validated());
+            return $this->apiResponse->success(
+                new AppointmentResource($appointment),
+                'Cita actualizada exitosamente',
+                Response::HTTP_OK
+            );
+        } catch (\Exception $e) {
+            return $this->apiResponse->error($e->getMessage(), Response::HTTP_CONFLICT);
+        }
+    }
+
+    public function updateStatus(Request $request, Appointment $id): JsonResponse
     {
         $request->validate([
             'status' => ['required', 'in:pending,confirmed,in_progress,completed,cancelled,no_show'],
         ]);
 
-        $appointment = $this->service->updateStatus($appointment, $request->status);
-        $this->loggerService->appointmentStatusChanged($appointment);
+        $appointment = $this->service->updateStatus($id, $request->status);
 
         return $this->apiResponse->success(
             new AppointmentResource($appointment),
@@ -232,11 +311,22 @@ class AppointmentController extends Controller
         );
     }
 
-    public function destroy(Appointment $appointment): JsonResponse
+    public function destroy(Appointment $id): JsonResponse
     {
-        $appointment->delete(); // Soft delete
+        $id->delete(); // Soft delete
         return $this->apiResponse->success(null, 'Cita cancelada exitosamente', Response::HTTP_OK);
     }
+}
+</file>
+
+<file path="app/Http/Controllers/Controller.php">
+<?php
+
+namespace App\Http\Controllers;
+
+abstract class Controller
+{
+    //
 }
 </file>
 
@@ -250,7 +340,6 @@ use App\Http\Resources\ExpenseResource;
 use App\Models\Expense;
 use App\Services\ApiResponse;
 use App\Services\ExpenseService;
-use App\Services\LoggerService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -259,7 +348,6 @@ class ExpenseController extends Controller
 {
     public function __construct(
         private ExpenseService $service,
-        private LoggerService  $loggerService,
         private ApiResponse    $apiResponse,
     ) {}
 
@@ -289,8 +377,6 @@ class ExpenseController extends Controller
             $request->file('receipt')
         );
 
-        $this->loggerService->expenseRegistered($expense);
-
         return $this->apiResponse->success(
             new ExpenseResource($expense->load('category', 'registeredBy')),
             'Gasto registrado exitosamente',
@@ -298,12 +384,12 @@ class ExpenseController extends Controller
         );
     }
 
-    public function destroy(Expense $expense): JsonResponse
+    public function destroy(Expense $id): JsonResponse
     {
         if (auth()->user()->role !== 'admin')
             return $this->apiResponse->error('No tienes permiso para eliminar gastos.', Response::HTTP_FORBIDDEN);
 
-        $expense->delete();
+        $id->delete();
 
         return $this->apiResponse->success(null, 'Gasto eliminado exitosamente', Response::HTTP_OK);
     }
@@ -356,55 +442,6 @@ class FinancialController extends Controller
 }
 </file>
 
-<file path="app/Http/Controllers/MediaController.php">
-<?php
-
-namespace App\Http\Controllers;
-
-use App\Http\Requests\Media\UploadMediaRequest;
-use App\Http\Resources\MediaResource;
-use App\Models\Media;
-use App\Models\User;
-use App\Services\ApiResponse;
-use App\Services\LoggerService;
-use App\Services\MediaService;
-use Illuminate\Http\JsonResponse;
-use Symfony\Component\HttpFoundation\Response;
-
-class MediaController extends Controller
-{
-    public function __construct(
-        private MediaService $service,
-        private LoggerService $loggerService,
-        private ApiResponse $apiResponse,
-    ) {}
-
-    // POST /api/users/{user}/media
-    public function store(UploadMediaRequest $request, User $user): JsonResponse
-    {
-        $media = $this->service->upload(
-            model:      $user,
-            file:       $request->file('file'),
-            collection: $request->collection,
-        );
-
-        return $this->apiResponse->success(
-            new MediaResource($media),
-            'Archivo subido exitosamente.',
-            Response::HTTP_CREATED
-        );
-    }
-
-    // DELETE /api/media/{media}
-    public function destroy(Media $media): JsonResponse
-    {
-        $this->service->delete($media);
-
-        return $this->apiResponse->success(null, 'Archivo eliminado exitosamente.');
-    }
-}
-</file>
-
 <file path="app/Http/Controllers/PaymentController.php">
 <?php
 
@@ -413,7 +450,6 @@ namespace App\Http\Controllers;
 use App\Http\Requests\Payment\StorePaymentRequest;
 use App\Http\Resources\PaymentResource;
 use App\Services\ApiResponse;
-use App\Services\LoggerService;
 use App\Services\PaymentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -423,7 +459,6 @@ class PaymentController extends Controller
 {
     public function __construct(
         private PaymentService $service,
-        private LoggerService  $loggerService,
         private ApiResponse    $apiResponse,
     ) {}
 
@@ -444,7 +479,6 @@ class PaymentController extends Controller
     {
         try {
             $payment = $this->service->register($request->validated());
-            $this->loggerService->paymentRegistered($payment);
 
             return $this->apiResponse->success(
                 new PaymentResource($payment),
@@ -458,7 +492,7 @@ class PaymentController extends Controller
 }
 </file>
 
-<file path="app/Http/Requests/Appoinment/StoreAppointmentRequest.php">
+<file path="app/Http/Requests/Appointment/StoreAppointmentRequest.php">
 <?php
 
 namespace App\Http\Requests\Appointment;
@@ -496,7 +530,7 @@ class StoreAppointmentRequest extends FormRequest
 }
 </file>
 
-<file path="app/Http/Requests/Appoinment/UpdateAppointmentRequest.php">
+<file path="app/Http/Requests/Appointment/UpdateAppointmentRequest.php">
 <?php
 
 namespace App\Http\Requests\Appoinment;
@@ -533,6 +567,77 @@ class UpdateAppointmentRequest extends FormRequest
 }
 </file>
 
+<file path="app/Http/Requests/Auth/LoginRequest.php">
+<?php
+
+namespace App\Http\Requests\Auth;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Contracts\Validation\Validator;
+use Illuminate\Http\Exceptions\HttpResponseException;
+
+class LoginRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'email'    => ['required', 'string', 'email'],
+            'password' => ['required', 'string'],
+        ];
+    }
+
+    protected function failedValidation(Validator $validator): never
+    {
+        throw new HttpResponseException(
+            response()->json(['errors' => $validator->errors()], 422)
+        );
+    }
+}
+</file>
+
+<file path="app/Http/Requests/Auth/PasswordRequest.php">
+<?php
+
+namespace App\Http\Requests\Auth;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Contracts\Validation\Validator;
+use Illuminate\Http\Exceptions\HttpResponseException;
+
+class PasswordRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'current_password' => ['required', 'string'],
+            'new_password'     => [
+                'required', 'string', 'min:8', 'confirmed',
+                'regex:/[A-Z]/',
+                'regex:/[0-9]/',
+                'regex:/[@$!%*#?&]/',
+            ],
+        ];
+    }
+
+    protected function failedValidation(Validator $validator): never
+    {
+        throw new HttpResponseException(
+            response()->json(['errors' => $validator->errors()], 422)
+        );
+    }
+}
+</file>
+
 <file path="app/Http/Requests/Expense/StoreExpenseRequest.php">
 <?php
 
@@ -556,55 +661,7 @@ class StoreExpenseRequest extends FormRequest
             'description'  => ['required', 'string', 'max:255'],
             'amount'       => ['required', 'numeric', 'min:0.01'],
             'expense_date' => ['required', 'date'],
-            'receipt'      => ['nullable', 'file', 'mimes:jpg,jpeg,png,pdf', 'max:10240'],
         ];
-    }
-
-    protected function failedValidation(Validator $validator): never
-    {
-        throw new HttpResponseException(
-            response()->json(['errors' => $validator->errors()], 422)
-        );
-    }
-}
-</file>
-
-<file path="app/Http/Requests/Media/UploadMediaRequest.php">
-<?php
-
-namespace App\Http\Requests\Media;
-
-use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Contracts\Validation\Validator;
-use Illuminate\Http\Exceptions\HttpResponseException;
-
-class UploadMediaRequest extends FormRequest
-{
-    public function authorize(): bool
-    {
-        return true;
-    }
-
-    public function rules(): array
-    {
-        return [
-            'file'       => ['required', 'file', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
-            'collection' => ['required', 'in:avatar,haircut'],
-        ];
-    }
-
-    // Validación extra: máximo 2 fotos de corte por cliente
-    public function withValidator(Validator $validator): void
-    {
-        $validator->after(function ($v) {
-            $user = $this->route('user'); // el usuario que viene en la URL
-            if ($this->collection === 'haircut') {
-                $count = $user->haircutPhotos()->count();
-                if ($count >= 2) {
-                    $v->errors()->add('file', 'El cliente ya tiene 2 fotos de corte registradas.');
-                }
-            }
-        });
     }
 
     protected function failedValidation(Validator $validator): never
@@ -740,33 +797,7 @@ class ExpenseResource extends JsonResource
                 'color' => $this->category->color,
             ]),
             'registered_by' => UserResource::make($this->whenLoaded('registeredBy')),
-            'has_receipt'   => !is_null($this->drive_receipt_id),
             'created_at'    => $this->created_at->toDateTimeString(),
-        ];
-    }
-}
-</file>
-
-<file path="app/Http/Resources/MediaResource.php">
-<?php
-
-namespace App\Http\Resources;
-
-use Illuminate\Http\Resources\Json\JsonResource;
-use Illuminate\Http\Request;
-
-class MediaResource extends JsonResource
-{
-    public function toArray(Request $request): array
-    {
-        return [
-            'id'         => $this->id,
-            'collection' => $this->collection,
-            'url'        => $this->drive_url,
-            'filename'   => $this->filename,
-            'mime_type'  => $this->mime_type,
-            'size_bytes' => $this->size_bytes,
-            'created_at' => $this->created_at?->toDateTimeString(),
         ];
     }
 }
@@ -926,7 +957,6 @@ class Expense extends Model
         'description',
         'amount',
         'expense_date',
-        'drive_receipt_id',
     ];
 
     protected $casts = [
@@ -961,42 +991,6 @@ class ExpenseCategory extends Model
     public function expenses(): HasMany
     {
         return $this->hasMany(Expense::class, 'category_id');
-    }
-}
-</file>
-
-<file path="app/Models/Media.php">
-<?php
-
-namespace App\Models;
-
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\MorphTo;
-
-class Media extends Model
-{
-    public $timestamps = false;
-    const UPDATED_AT = null;
-
-    protected $fillable = [
-        'model_type',
-        'model_id',
-        'collection',
-        'drive_file_id',
-        'drive_url',
-        'mime_type',
-        'filename',
-        'size_bytes',
-        'created_at',
-    ];
-
-    protected $casts = [
-        'created_at' => 'datetime',
-    ];
-
-    public function model(): MorphTo
-    {
-        return $this->morphTo();
     }
 }
 </file>
@@ -1147,6 +1141,57 @@ class UserPolicy
 }
 </file>
 
+<file path="app/Services/ApiResponse.php">
+<?php
+
+namespace App\Services;
+
+use Illuminate\Http\JsonResponse;
+
+class ApiResponse
+{
+    public static function success(
+        $data = null, 
+        string $message = 'Operación exitosa', 
+        int $code = 200
+    ): JsonResponse 
+    {
+        return response()->json([
+            'success' => true,
+            'message' => $message,
+            'data'    => $data,
+        ], $code);
+    }
+
+    public static function error(
+        string $message = 'Error en la operación', 
+        int $code = 400, 
+    ): JsonResponse
+    {
+        return response()->json([
+            'success' => false,
+            'message' => $message,
+        ], $code);
+    }
+
+    public static function tokenResponse(
+        $user, 
+        string $token, 
+        bool $mustChangePassword = false
+    ): JsonResponse
+    {
+        return response()->json([
+            'success'             => true,
+            'message'             => 'Inicio de sesión exitoso.',
+            'access_token'        => $token,
+            'token_type'          => 'Bearer',
+            'must_change_password'=> $mustChangePassword,
+            'user'                => $user,
+        ]);
+    }
+}
+</file>
+
 <file path="app/Services/AppointmentService.php">
 <?php
 
@@ -1208,6 +1253,45 @@ class AppointmentService
         });
     }
 
+    public function update(Appointment $appointment, array $data): Appointment
+    {
+        // Solo se pueden actualizar ciertos campos
+        $appointment->update([
+            'barber_id'        => $data['barber_id'] ?? $appointment->barber_id,
+            'appointment_date' => $data['appointment_date'] ?? $appointment->appointment_date,
+            'start_time'       => $data['start_time'] ?? $appointment->start_time,
+            'notes'            => $data['notes'] ?? $appointment->notes,
+        ]);
+
+        // Si se actualizó el horario o el barbero, recalcular end_time y verificar conflictos
+        if (isset($data['barber_id']) || isset($data['appointment_date']) || isset($data['start_time'])) {
+            $services   = $appointment->services;
+            $totalMin   = $services->sum('duration_min');
+            $endTime    = Carbon::parse($appointment->start_time)->addMinutes($totalMin)->format('H:i');
+
+            // Verificar conflictos con el nuevo horario/barbero
+            $conflict = Appointment::forBarber($appointment->barber_id)
+                ->forDate($appointment->appointment_date)
+                ->active()
+                ->where('id', '!=', $appointment->id)
+                ->where(function ($q) use ($appointment, $endTime) {
+                    $q->whereBetween('start_time', [$appointment->start_time, $endTime])
+                      ->orWhereBetween('end_time',  [$appointment->start_time, $endTime]);
+                })->exists();
+
+            if ($conflict) {
+                throw new \Exception('El barbero no está disponible en ese horario.');
+            }
+
+            // Actualizar end_time si cambió el horario o el barbero
+            if (isset($data['barber_id']) || isset($data['appointment_date']) || isset($data['start_time'])) {
+                $appointment->update(['end_time' => $endTime]);
+            }
+        }
+
+        return $appointment->fresh(['client', 'barber', 'services']);
+    }
+
     public function updateStatus(Appointment $appointment, string $status): Appointment
     {
         $appointment->update(['status' => $status]);
@@ -1220,712 +1304,7 @@ class AppointmentService
             ->when($filters['date']      ?? null, fn($q, $d)  => $q->forDate($d))
             ->when($filters['barber_id'] ?? null, fn($q, $id) => $q->forBarber($id))
             ->when($filters['status']    ?? null, fn($q, $s)  => $q->where('status', $s))
-            ->paginate(20);
-    }
-}
-</file>
-
-<file path="app/Services/ExpenseService.php">
-<?php
-
-namespace App\Services;
-
-use App\Models\Expense;
-
-class ExpenseService
-{
-    public function __construct(
-        private GoogleDriveService $drive
-    ) {}
-
-    public function create(array $data, $receiptFile = null): Expense
-    {
-        $driveReceiptId = null;
-
-        // Si viene un archivo de comprobante, subirlo a Drive
-        if ($receiptFile) {
-            $result = $this->drive->upload(
-                file:     $receiptFile,
-                folder:   config('services.google.folder_id'),
-                filename: 'receipt_' . auth()->id() . '_' . time(),
-            );
-            $driveReceiptId = $result['id'];
-        }
-
-        return Expense::create([
-            'registered_by'    => auth()->id(),
-            'category_id'      => $data['category_id'],
-            'description'      => $data['description'],
-            'amount'           => $data['amount'],
-            'expense_date'     => $data['expense_date'],
-            'drive_receipt_id' => $driveReceiptId,
-        ]);
-    }
-
-    public function getAll(array $filters = [])
-    {
-        return Expense::with(['category', 'registeredBy'])
-            ->when($filters['category_id'] ?? null, fn($q, $id) => $q->where('category_id', $id))
-            ->when($filters['from'] ?? null, fn($q, $d) => $q->whereDate('expense_date', '>=', $d))
-            ->when($filters['to'] ?? null, fn($q, $d) => $q->whereDate('expense_date', '<=', $d))
-            ->orderByDesc('expense_date')
-            ->paginate(20);
-    }
-}
-</file>
-
-<file path="app/Services/FinancialReportService.php">
-<?php
-
-namespace App\Services;
-
-use App\Models\Expense;
-use App\Models\Payment;
-use Carbon\Carbon;
-
-class FinancialReportService
-{
-    public function summary(Carbon $from, Carbon $to): array
-    {
-        // Total de ingresos en el período
-        $income = Payment::whereBetween('paid_at', [$from, $to])
-            ->where('status', 'completed')
-            ->sum('amount');
-
-        // Total de egresos en el período
-        $expenses = Expense::whereBetween('expense_date', [$from, $to])
-            ->sum('amount');
-
-        // Ingresos agrupados por barbero
-        $byBarber = Payment::with('appointment.barber')
-            ->whereBetween('paid_at', [$from, $to])
-            ->where('status', 'completed')
-            ->get()
-            ->groupBy('appointment.barber.name')
-            ->map(fn($payments) => $payments->sum('amount'));
-
-        // Egresos agrupados por categoría
-        $byCategory = Expense::with('category')
-            ->whereBetween('expense_date', [$from, $to])
-            ->get()
-            ->groupBy('category.name')
-            ->map(fn($expenses) => $expenses->sum('amount'));
-
-        return [
-            'period'      => ['from' => $from->toDateString(), 'to' => $to->toDateString()],
-            'income'      => (float) $income,
-            'expenses'    => (float) $expenses,
-            'net_profit'  => (float) ($income - $expenses),
-            'by_barber'   => $byBarber,
-            'by_category' => $byCategory,
-        ];
-    }
-}
-</file>
-
-<file path="app/Services/GoogleDriveService.php">
-<?php
-
-namespace App\Services;
-
-use Illuminate\Http\UploadedFile;
-
-class GoogleDriveService
-{
-    /**
-     * Sube un archivo a Google Drive y retorna su ID y URL.
-     *
-     * @return array{id: string, webViewLink: string}
-     */
-    public function upload(UploadedFile $file, string $folder, string $filename): array
-    {
-        // TODO: implementar con la librería google/apiclient
-        // composer require google/apiclient:^2.0
-        //
-        // Ejemplo de flujo:
-        // 1. Autenticarse con las credenciales del .env
-        // 2. Crear el archivo en Drive con el folder indicado
-        // 3. Poner el archivo como de lectura pública (o compartido con el dominio)
-        // 4. Retornar el id y la webViewLink
-
-        throw new \RuntimeException(
-            'GoogleDriveService::upload() no está implementado aún. ' .
-            'Instala google/apiclient y agrega las credenciales en config/services.php'
-        );
-    }
-
-    /**
-     * Elimina un archivo de Google Drive por su ID.
-     */
-    public function delete(string $fileId): void
-    {
-        // TODO: implementar con google/apiclient
-        throw new \RuntimeException(
-            'GoogleDriveService::delete() no está implementado aún.'
-        );
-    }
-}
-</file>
-
-<file path="app/Services/MediaService.php">
-<?php
-
-namespace App\Services;
-
-use App\Models\Media;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Http\UploadedFile;
-
-class MediaService
-{
-    public function __construct(
-        private GoogleDriveService $drive
-    ) {}
-
-    public function upload(Model $model, UploadedFile $file, string $collection): Media
-    {
-        // Si es avatar, eliminar el anterior (solo puede haber 1)
-        if ($collection === 'avatar') {
-            $old = $model->media()->where('collection', 'avatar')->first();
-            if ($old) {
-                $this->drive->delete($old->drive_file_id);
-                $old->delete();
-            }
-        }
-
-        // Subir a Google Drive
-        $result = $this->drive->upload(
-            file:     $file,
-            folder:   config('services.google.folder_id'),
-            filename: "{$collection}_{$model->id}_" . time(),
-        );
-
-        // Guardar la referencia en la base de datos
-        return $model->media()->create([
-            'collection'    => $collection,
-            'drive_file_id' => $result['id'],
-            'drive_url'     => $result['webViewLink'],
-            'mime_type'     => $file->getMimeType(),
-            'filename'      => $file->getClientOriginalName(),
-            'size_bytes'    => $file->getSize(),
-            'created_at'    => now(),
-        ]);
-    }
-
-    public function delete(Media $media): void
-    {
-        $this->drive->delete($media->drive_file_id);
-        $media->delete();
-    }
-}
-</file>
-
-<file path="app/Services/PaymentService.php">
-<?php
-
-namespace App\Services;
-
-use App\Models\Appointment;
-use App\Models\Payment;
-
-class PaymentService
-{
-    public function register(array $data): Payment
-    {
-        $appointment = Appointment::findOrFail($data['appointment_id']);
-
-        $payment = Payment::create([
-            'appointment_id' => $appointment->id,
-            'received_by'    => auth()->id(),
-            'amount'         => $data['amount'],
-            'method'         => $data['method'],
-            'reference'      => $data['reference'] ?? null,
-            'status'         => 'completed',
-            'paid_at'        => $data['paid_at'] ?? now(),
-        ]);
-
-        // Si el pago cubre el total, marcar la cita como completada
-        if ($payment->amount >= $appointment->total_price) {
-            $appointment->update(['status' => 'completed']);
-        }
-
-        return $payment->load('receivedBy', 'appointment');
-    }
-
-    public function getAll(array $filters = [])
-    {
-        return Payment::with(['appointment.client', 'appointment.barber', 'receivedBy'])
-            ->when($filters['appointment_id'] ?? null, fn($q, $id) => $q->where('appointment_id', $id))
-            ->when($filters['status'] ?? null, fn($q, $s) => $q->where('status', $s))
-            ->when($filters['method'] ?? null, fn($q, $m) => $q->where('method', $m))
-            ->orderByDesc('paid_at')
-            ->paginate(20);
-    }
-}
-</file>
-
-<file path=".editorconfig">
-root = true
-
-[*]
-charset = utf-8
-end_of_line = lf
-indent_size = 4
-indent_style = space
-insert_final_newline = true
-trim_trailing_whitespace = true
-
-[*.md]
-trim_trailing_whitespace = false
-
-[*.{yml,yaml}]
-indent_size = 2
-
-[{compose,docker-compose}.{yml,yaml}]
-indent_size = 4
-</file>
-
-<file path=".env.example">
-APP_NAME=Laravel
-APP_ENV=local
-APP_KEY=
-APP_DEBUG=true
-APP_URL=http://localhost
-
-APP_LOCALE=en
-APP_FALLBACK_LOCALE=en
-APP_FAKER_LOCALE=en_US
-
-APP_MAINTENANCE_DRIVER=file
-# APP_MAINTENANCE_STORE=database
-
-# PHP_CLI_SERVER_WORKERS=4
-
-BCRYPT_ROUNDS=12
-
-LOG_CHANNEL=stack
-LOG_STACK=single
-LOG_DEPRECATIONS_CHANNEL=null
-LOG_LEVEL=debug
-
-DB_CONNECTION=sqlite
-# DB_HOST=127.0.0.1
-# DB_PORT=3306
-# DB_DATABASE=laravel
-# DB_USERNAME=root
-# DB_PASSWORD=
-
-SESSION_DRIVER=database
-SESSION_LIFETIME=120
-SESSION_ENCRYPT=false
-SESSION_PATH=/
-SESSION_DOMAIN=null
-
-BROADCAST_CONNECTION=log
-FILESYSTEM_DISK=local
-QUEUE_CONNECTION=database
-
-CACHE_STORE=database
-# CACHE_PREFIX=
-
-MEMCACHED_HOST=127.0.0.1
-
-REDIS_CLIENT=phpredis
-REDIS_HOST=127.0.0.1
-REDIS_PASSWORD=null
-REDIS_PORT=6379
-
-MAIL_MAILER=log
-MAIL_SCHEME=null
-MAIL_HOST=127.0.0.1
-MAIL_PORT=2525
-MAIL_USERNAME=null
-MAIL_PASSWORD=null
-MAIL_FROM_ADDRESS="hello@example.com"
-MAIL_FROM_NAME="${APP_NAME}"
-
-AWS_ACCESS_KEY_ID=
-AWS_SECRET_ACCESS_KEY=
-AWS_DEFAULT_REGION=us-east-1
-AWS_BUCKET=
-AWS_USE_PATH_STYLE_ENDPOINT=false
-
-VITE_APP_NAME="${APP_NAME}"
-</file>
-
-<file path=".gitattributes">
-* text=auto eol=lf
-
-*.blade.php diff=html
-*.css diff=css
-*.html diff=html
-*.md diff=markdown
-*.php diff=php
-
-/.github export-ignore
-CHANGELOG.md export-ignore
-.styleci.yml export-ignore
-</file>
-
-<file path=".gitignore">
-*.log
-.DS_Store
-.env
-.env.backup
-.env.production
-.phpactor.json
-.phpunit.result.cache
-/.codex
-/.cursor/
-/.idea
-/.nova
-/.phpunit.cache
-/.vscode
-/.zed
-/auth.json
-/node_modules
-/public/build
-/public/fonts-manifest.dev.json
-/public/hot
-/public/storage
-/storage/*.key
-/storage/pail
-/vendor
-_ide_helper.php
-Homestead.json
-Homestead.yaml
-Thumbs.db
-</file>
-
-<file path=".npmrc">
-ignore-scripts=true
-audit=true
-</file>
-
-<file path="app/Http/Controllers/Controller.php">
-<?php
-
-namespace App\Http\Controllers;
-
-abstract class Controller
-{
-    //
-}
-</file>
-
-<file path="app/Http/Controllers/ServiceController.php">
-<?php
-
-namespace App\Http\Controllers;
-
-use App\Http\Requests\Service\StoreServiceRequest;
-use App\Http\Resources\ServiceResource;
-use App\Models\Service;
-use App\Services\ApiResponse;
-use App\Services\LoggerService;
-use Illuminate\Http\JsonResponse;
-use Symfony\Component\HttpFoundation\Response;
-
-class ServiceController extends Controller
-{
-    public function __construct(
-        private ApiResponse    $apiResponse,
-        private LoggerService  $loggerService,
-    ) {}
-
-    public function index(): JsonResponse
-    {
-        $services = Service::active()->get();
-        return $this->apiResponse->success(
-            ServiceResource::collection($services),
-            'Servicios obtenidos exitosamente',
-            Response::HTTP_OK
-        );
-    }
-
-    public function store(StoreServiceRequest $request): JsonResponse
-    {
-        if (auth()->user()->role !== 'admin')
-            return $this->apiResponse->error('No tienes permiso para crear servicios.', Response::HTTP_FORBIDDEN);
-
-        $service = Service::create($request->validated());
-        return $this->apiResponse->success(
-            new ServiceResource($service),
-            'Servicio creado exitosamente',
-            Response::HTTP_CREATED
-        );
-    }
-
-    public function update(StoreServiceRequest $request, Service $service): JsonResponse
-    {
-        if (auth()->user()->role !== 'admin')
-            return $this->apiResponse->error('No tienes permiso para editar servicios.', Response::HTTP_FORBIDDEN);
-
-        $service->update($request->validated());
-        return $this->apiResponse->success(
-            new ServiceResource($service),
-            'Servicio actualizado exitosamente',
-            Response::HTTP_OK
-        );
-    }
-
-    public function destroy(Service $service): JsonResponse
-    {
-        if (auth()->user()->role !== 'admin')
-            return $this->apiResponse->error('No tienes permiso para eliminar servicios.', Response::HTTP_FORBIDDEN);
-
-        $service->delete(); // Soft delete
-        return $this->apiResponse->success(null, 'Servicio eliminado exitosamente', Response::HTTP_OK);
-    }
-}
-</file>
-
-<file path="app/Http/Controllers/UserController.php">
-<?php
-
-namespace App\Http\Controllers;
-
-use App\Services\ApiResponse;
-use App\Services\UserService;
-use App\Services\LoggerService;
-use Illuminate\Http\Request;
-use App\Http\Requests\Auth\UserRequest;
-use App\Http\Resources\UserResource;
-use Symfony\Component\HttpFoundation\Response;
-
-class UserController extends Controller
-{
-    public function __construct(
-        private UserService $service, 
-        private LoggerService $loggerService, 
-        private ApiResponse $apiResponse,
-        ) {}
-
-    public function index(Request $request)
-    {
-        $role = $request->query('role');
-        $users = $this->service->getAllUsers($role);
-        $this->loggerService->index();
-
-        return $this->apiResponse->success(
-            UserResource::collection($users), 
-            'Usuarios obtenidos exitosamente', 
-            Response::HTTP_OK);
-    }
-
-    public function update(UserRequest $request, int $id)
-    {
-        $user = $this->service->getUserById($id);
-        $updatedUser = $this->service->updateUser($user, $request->validated());
-        $this->loggerService->update($id);
-
-        return $this->apiResponse->success(
-            new UserResource($updatedUser), 
-            'Usuario actualizado exitosamente', 
-            Response::HTTP_OK);
-    }
-
-    public function destroy(int $id)
-    {
-        if (!auth()->check() || auth()->user()->role !== 'admin') 
-            return $this->apiResponse->error('No tienes permiso para eliminar usuarios.', Response::HTTP_FORBIDDEN);
-
-        $user = $this->service->getUserById($id);
-        $this->service->deleteUser($user);
-        $this->loggerService->destroy($id);
-        return $this->apiResponse->success(
-            null, 
-            'Usuario eliminado exitosamente', 
-            Response::HTTP_OK);
-    }
-}
-</file>
-
-<file path="app/Http/Requests/Auth/LoginRequest.php">
-<?php
-
-namespace App\Http\Requests\Auth;
-
-use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Contracts\Validation\Validator;
-use Illuminate\Http\Exceptions\HttpResponseException;
-
-class LoginRequest extends FormRequest
-{
-    public function authorize(): bool
-    {
-        return true;
-    }
-
-    public function rules(): array
-    {
-        return [
-            'email'    => ['required', 'string', 'email'],
-            'password' => ['required', 'string'],
-        ];
-    }
-
-    protected function failedValidation(Validator $validator): never
-    {
-        throw new HttpResponseException(
-            response()->json(['errors' => $validator->errors()], 422)
-        );
-    }
-}
-</file>
-
-<file path="app/Http/Requests/Auth/PasswordRequest.php">
-<?php
-
-namespace App\Http\Requests\Auth;
-
-use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Contracts\Validation\Validator;
-use Illuminate\Http\Exceptions\HttpResponseException;
-
-class PasswordRequest extends FormRequest
-{
-    public function authorize(): bool
-    {
-        return true;
-    }
-
-    public function rules(): array
-    {
-        return [
-            'current_password' => ['required', 'string'],
-            'new_password'     => [
-                'required', 'string', 'min:8', 'confirmed',
-                'regex:/[A-Z]/',
-                'regex:/[0-9]/',
-                'regex:/[@$!%*#?&]/',
-            ],
-        ];
-    }
-
-    protected function failedValidation(Validator $validator): never
-    {
-        throw new HttpResponseException(
-            response()->json(['errors' => $validator->errors()], 422)
-        );
-    }
-}
-</file>
-
-<file path="app/Models/Service.php">
-<?php
-
-namespace App\Models;
-
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
-use Illuminate\Database\Eloquent\SoftDeletes;
-
-class Service extends Model
-{
-    use SoftDeletes;
-
-    protected $fillable = [
-        'name',
-        'description',
-        'price',
-        'duration_min',
-        'active',
-    ];
-
-    protected $casts = [
-        'price'  => 'decimal:2',
-        'active' => 'boolean',
-    ];
-
-    public function appointments(): BelongsToMany
-    {
-        return $this->belongsToMany(Appointment::class, 'appointment_services')
-                    ->withPivot('price_at_time');
-    }
-
-    // Solo servicios activos para agendar
-    public function scopeActive($query)
-    {
-        return $query->where('active', true);
-    }
-}
-</file>
-
-<file path="app/Providers/AppServiceProvider.php">
-<?php
-
-namespace App\Providers;
-
-use Illuminate\Support\ServiceProvider;
-
-class AppServiceProvider extends ServiceProvider
-{
-    /**
-     * Register any application services.
-     */
-    public function register(): void
-    {
-        //
-    }
-
-    /**
-     * Bootstrap any application services.
-     */
-    public function boot(): void
-    {
-        //
-    }
-}
-</file>
-
-<file path="app/Services/ApiResponse.php">
-<?php
-
-namespace App\Services;
-
-use Illuminate\Http\JsonResponse;
-
-class ApiResponse
-{
-    public static function success(
-        $data = null, 
-        string $message = 'Operación exitosa', 
-        int $code = 200
-    ): JsonResponse 
-    {
-        return response()->json([
-            'success' => true,
-            'message' => $message,
-            'data'    => $data,
-        ], $code);
-    }
-
-    public static function error(
-        string $message = 'Error en la operación', 
-        int $code = 400, 
-    ): JsonResponse
-    {
-        return response()->json([
-            'success' => false,
-            'message' => $message,
-        ], $code);
-    }
-
-    public static function tokenResponse(
-        $user, 
-        string $token, 
-        bool $mustChangePassword = false
-    ): JsonResponse
-    {
-        return response()->json([
-            'success'             => true,
-            'message'             => 'Inicio de sesión exitoso.',
-            'access_token'        => $token,
-            'token_type'          => 'Bearer',
-            'must_change_password'=> $mustChangePassword,
-            'user'                => $user,
-        ]);
+            ->paginate(10);
     }
 }
 </file>
@@ -2030,45 +1409,132 @@ class AuthService
 }
 </file>
 
-<file path="app/Services/UserService.php">
+<file path="app/Services/ExpenseService.php">
 <?php
 
 namespace App\Services;
 
-use App\Models\User;
+use App\Models\Expense;
 
-class UserService
+class ExpenseService
 {
 
-
-    public function getAllUsers(?string $role = null)
+    public function create(array $data, $receiptFile = null): Expense
     {
-        $query = User::query();
+        $driveReceiptId = null;
 
-        if ($role) {
-            $query->where('role', $role);
+        return Expense::create([
+            'registered_by'    => auth()->id(),
+            'category_id'      => $data['category_id'],
+            'description'      => $data['description'],
+            'amount'           => $data['amount'],
+            'expense_date'     => $data['expense_date'],
+            'drive_receipt_id' => $driveReceiptId,
+        ]);
+    }
+
+    public function getAll(array $filters = [])
+    {
+        return Expense::with(['category', 'registeredBy'])
+            ->when($filters['category_id'] ?? null, fn($q, $id) => $q->where('category_id', $id))
+            ->when($filters['from'] ?? null, fn($q, $d) => $q->whereDate('expense_date', '>=', $d))
+            ->when($filters['to'] ?? null, fn($q, $d) => $q->whereDate('expense_date', '<=', $d))
+            ->orderByDesc('expense_date')
+            ->paginate(20);
+    }
+}
+</file>
+
+<file path="app/Services/FinancialReportService.php">
+<?php
+
+namespace App\Services;
+
+use App\Models\Expense;
+use App\Models\Payment;
+use Carbon\Carbon;
+
+class FinancialReportService
+{
+    public function summary(Carbon $from, Carbon $to): array
+    {
+        // Total de ingresos en el período
+        $income = Payment::whereBetween('paid_at', [$from, $to])
+            ->where('status', 'completed')
+            ->sum('amount');
+
+        // Total de egresos en el período
+        $expenses = Expense::whereBetween('expense_date', [$from, $to])
+            ->sum('amount');
+
+        // Ingresos agrupados por barbero
+        $byBarber = Payment::with('appointment.barber')
+            ->whereBetween('paid_at', [$from, $to])
+            ->where('status', 'completed')
+            ->get()
+            ->groupBy('appointment.barber.name')
+            ->map(fn($payments) => $payments->sum('amount'));
+
+        // Egresos agrupados por categoría
+        $byCategory = Expense::with('category')
+            ->whereBetween('expense_date', [$from, $to])
+            ->get()
+            ->groupBy('category.name')
+            ->map(fn($expenses) => $expenses->sum('amount'));
+
+        return [
+            'period'      => ['from' => $from->toDateString(), 'to' => $to->toDateString()],
+            'income'      => (float) $income,
+            'expenses'    => (float) $expenses,
+            'net_profit'  => (float) ($income - $expenses),
+            'by_barber'   => $byBarber,
+            'by_category' => $byCategory,
+        ];
+    }
+}
+</file>
+
+<file path="app/Services/PaymentService.php">
+<?php
+
+namespace App\Services;
+
+use App\Models\Appointment;
+use App\Models\Payment;
+
+class PaymentService
+{
+    public function register(array $data): Payment
+    {
+        $appointment = Appointment::findOrFail($data['appointment_id']);
+
+        $payment = Payment::create([
+            'appointment_id' => $appointment->id,
+            'received_by'    => auth()->id(),
+            'amount'         => $data['amount'],
+            'method'         => $data['method'],
+            'reference'      => $data['reference'] ?? null,
+            'status'         => 'completed',
+            'paid_at'        => $data['paid_at'] ?? now(),
+        ]);
+
+        // Si el pago cubre el total, marcar la cita como completada
+        if ($payment->amount >= $appointment->total_price) {
+            $appointment->update(['status' => 'completed']);
         }
 
-        return $query->paginate(10); 
+        return $payment->load('receivedBy', 'appointment');
     }
 
-    public function getUserById($id)
+    public function getAll(array $filters = [])
     {
-        return User::findOrFail($id);
+        return Payment::with(['appointment.client', 'appointment.barber', 'receivedBy'])
+            ->when($filters['appointment_id'] ?? null, fn($q, $id) => $q->where('appointment_id', $id))
+            ->when($filters['status'] ?? null, fn($q, $s) => $q->where('status', $s))
+            ->when($filters['method'] ?? null, fn($q, $m) => $q->where('method', $m))
+            ->orderByDesc('paid_at')
+            ->paginate(20);
     }
-
-    public function updateUser(User $user, array $data)
-    {
-        $user->update($data);
-        return $user;
-    }
-
-    public function deleteUser(User $user)
-    {
-        $user->delete();
-        return true;
-    }
-
 }
 </file>
 
@@ -3169,13 +2635,6 @@ return [
         ],
     ],
 
-    'google' => [
-        'client_id' => env('GOOGLE_CLIENT_ID'),
-        'client_secret' => env('GOOGLE_CLIENT_SECRET'),
-        'refresh_token' => env('GOOGLE_REFRESH_TOKEN'),
-        'folder_id' => env('GOOGLE_DRIVE_FOLDER_ID'),
-    ],
-
 ];
 </file>
 
@@ -4054,27 +3513,163 @@ return new class extends Migration {
 };
 </file>
 
-<file path="database/seeders/DatabaseSeeder.php">
+<file path="database/migrations/2026_05_30_020727_delete_media_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::dropIfExists('media');
+    }
+};
+</file>
+
+<file path="database/migrations/2026_05_30_030811_delete_expenses_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::dropIfExists('expenses');
+    }
+};
+</file>
+
+<file path="database/migrations/2026_05_30_030917_create_expenses_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::create('expenses', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('registered_by')
+                ->constrained('users')->restrictOnDelete();
+            $table->foreignId('category_id')
+                ->constrained('expense_categories')->restrictOnDelete();
+            $table->string('description');
+            $table->decimal('amount', 10, 2);
+            $table->date('expense_date');
+            $table->timestamps();
+            $table->softDeletes();
+
+            $table->index('expense_date');
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('expenses');
+    }
+};
+</file>
+
+<file path="database/seeders/AdminUserSeeder.php">
 <?php
 
 namespace Database\Seeders;
 
 use App\Models\User;
-use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 
-class DatabaseSeeder extends Seeder
+class AdminUserSeeder extends Seeder
 {
-    use WithoutModelEvents;
-
-    /**
-     * Seed the application's database.
-     */
     public function run(): void
     {
-        $this->call([
-            ServiceSeeder::class,
-        ]);
+        User::firstOrCreate(
+            ['email' => 'admin@barberia.com'],
+            [
+                'name'                 => 'Admin',
+                'lastname'             => 'Principal',
+                'role'                 => 'admin',
+                'password'             => User::DEFAULT_PASSWORD,
+                'must_change_password' => true,
+                'email_verified_at'    => now(),
+            ]
+        );
+    }
+}
+</file>
+
+<file path="database/seeders/ExpenseCategorySeeder.php">
+<?php
+
+namespace Database\Seeders;
+
+use App\Models\ExpenseCategory;
+use Illuminate\Database\Seeder;
+
+class ExpenseCategorySeeder extends Seeder
+{
+    public function run(): void
+    {
+        $categories = [
+            ['name' => 'Renta',       'color' => '#EF4444'],
+            ['name' => 'Productos',   'color' => '#F59E0B'],
+            ['name' => 'Servicios',   'color' => '#3B82F6'],
+            ['name' => 'Nómina',      'color' => '#8B5CF6'],
+            ['name' => 'Equipamiento','color' => '#10B981'],
+            ['name' => 'Otros',       'color' => '#6B7280'],
+        ];
+
+        foreach ($categories as $category) {
+            ExpenseCategory::firstOrCreate(
+                ['name' => $category['name']],
+                ['color' => $category['color']]
+            );
+        }
+    }
+}
+</file>
+
+<file path="database/seeders/ServiceSeeder.php">
+<?php
+
+namespace Database\Seeders;
+
+use App\Models\Service;
+use Illuminate\Database\Seeder;
+
+class ServiceSeeder extends Seeder
+{
+    public function run(): void
+    {
+        $services = [
+            ['name' => 'Corte clásico',     'description' => 'Corte de cabello estilo clásico.',         'price' => 120.00, 'duration_min' => 30],
+            ['name' => 'Corte moderno',      'description' => 'Corte con técnicas actuales.',              'price' => 150.00, 'duration_min' => 40],
+            ['name' => 'Arreglo de barba',   'description' => 'Perfilado y arreglo de barba.',             'price' => 80.00,  'duration_min' => 20],
+            ['name' => 'Corte + barba',      'description' => 'Corte de cabello más arreglo de barba.',    'price' => 180.00, 'duration_min' => 50],
+            ['name' => 'Rasurado clásico',   'description' => 'Rasurado con navaja estilo barbería.',      'price' => 100.00, 'duration_min' => 25],
+            ['name' => 'Tinte',              'description' => 'Aplicación de color en cabello.',           'price' => 250.00, 'duration_min' => 60],
+        ];
+
+        foreach ($services as $service) {
+            Service::firstOrCreate(
+                ['name' => $service['name']],
+                array_merge($service, ['active' => true])
+            );
+        }
     }
 }
 </file>
@@ -5124,42 +4719,193 @@ export default defineConfig({
 });
 </file>
 
-<file path="app/Http/Requests/Auth/UserRequest.php">
+<file path=".env.example">
+APP_NAME=Laravel
+APP_ENV=local
+APP_KEY=
+APP_DEBUG=true
+APP_URL=http://localhost
+
+APP_LOCALE=en
+APP_FALLBACK_LOCALE=en
+APP_FAKER_LOCALE=en_US
+
+APP_TIMEZONE=
+
+APP_MAINTENANCE_DRIVER=file
+# APP_MAINTENANCE_STORE=database
+
+# PHP_CLI_SERVER_WORKERS=4
+
+BCRYPT_ROUNDS=12
+
+LOG_CHANNEL=stack
+LOG_STACK=single
+LOG_DEPRECATIONS_CHANNEL=null
+LOG_LEVEL=debug
+
+DB_CONNECTION=sqlite
+# DB_HOST=127.0.0.1
+# DB_PORT=3306
+# DB_DATABASE=laravel
+# DB_USERNAME=root
+# DB_PASSWORD=
+
+SESSION_DRIVER=database
+SESSION_LIFETIME=120
+SESSION_ENCRYPT=false
+SESSION_PATH=/
+SESSION_DOMAIN=null
+
+BROADCAST_CONNECTION=log
+FILESYSTEM_DISK=local
+QUEUE_CONNECTION=database
+
+CACHE_STORE=database
+# CACHE_PREFIX=
+
+MEMCACHED_HOST=127.0.0.1
+
+REDIS_CLIENT=phpredis
+REDIS_HOST=127.0.0.1
+REDIS_PASSWORD=null
+REDIS_PORT=6379
+
+MAIL_MAILER=log
+MAIL_SCHEME=null
+MAIL_HOST=127.0.0.1
+MAIL_PORT=2525
+MAIL_USERNAME=null
+MAIL_PASSWORD=null
+MAIL_FROM_ADDRESS="hello@example.com"
+MAIL_FROM_NAME="${APP_NAME}"
+
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_DEFAULT_REGION=us-east-1
+AWS_BUCKET=
+AWS_USE_PATH_STYLE_ENDPOINT=false
+
+VITE_APP_NAME="${APP_NAME}"
+</file>
+
+<file path="app/Http/Controllers/ServiceController.php">
 <?php
 
-namespace App\Http\Requests\Auth;
+namespace App\Http\Controllers;
 
-use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Contracts\Validation\Validator;
-use Illuminate\Http\Exceptions\HttpResponseException;
-use Illuminate\Validation\Rule;
+use App\Http\Requests\Service\StoreServiceRequest;
+use App\Http\Resources\ServiceResource;
+use App\Models\Service;
+use App\Services\ApiResponse;
+use App\Services\LoggerService;
+use Illuminate\Http\JsonResponse;
+use Symfony\Component\HttpFoundation\Response;
 
-class UserRequest extends FormRequest
+class ServiceController extends Controller
 {
-    public function authorize(): bool
-    {
-        return true;
-    }
+    public function __construct(
+        private ApiResponse $apiResponse,
+    ) {}
 
-    public function rules(): array
+    public function index(): JsonResponse
     {
-        return [
-            'name' => ['required', 'string', 'max:255'],
-            'lastname' => ['nullable', 'string', 'max:255'],
-            'email' => [
-                'required', 
-                'email:rfc,dns', 
-                'unique:users,email,' . $this->route('id')],
-            'phone' => ['nullable', 'string', 'max:20'],
-            'role' => ['required', 'in:admin,barber,receptionist,client'],
-        ];
-    }
-
-    protected function failedValidation(Validator $validator): never
-    {
-        throw new HttpResponseException(
-            response()->json(['errors' => $validator->errors()], 422)
+        $services = Service::active()->get();
+        return $this->apiResponse->success(
+            ServiceResource::collection($services),
+            'Servicios obtenidos exitosamente',
+            Response::HTTP_OK
         );
+    }
+
+    public function store(StoreServiceRequest $request): JsonResponse
+    {
+        if (auth()->user()->role !== 'admin')
+            return $this->apiResponse->error('No tienes permiso para crear servicios.', Response::HTTP_FORBIDDEN);
+
+        $service = Service::create($request->validated());
+        return $this->apiResponse->success(
+            new ServiceResource($service),
+            'Servicio creado exitosamente',
+            Response::HTTP_CREATED
+        );
+    }
+
+    public function update(StoreServiceRequest $request, Service $id): JsonResponse
+    {
+        if (auth()->user()->role !== 'admin')
+            return $this->apiResponse->error('No tienes permiso para editar servicios.', Response::HTTP_FORBIDDEN);
+
+        $id->update($request->validated());
+        return $this->apiResponse->success(
+            new ServiceResource($id),
+            'Servicio actualizado exitosamente',
+            Response::HTTP_OK
+        );
+    }
+
+    public function destroy(Service $id): JsonResponse
+    {
+        if (auth()->user()->role !== 'admin')
+            return $this->apiResponse->error('No tienes permiso para eliminar servicios.', Response::HTTP_FORBIDDEN);
+
+        $id->delete(); // Soft delete
+        return $this->apiResponse->success(null, 'Servicio eliminado exitosamente', Response::HTTP_OK);
+    }
+}
+</file>
+
+<file path="app/Http/Controllers/UserController.php">
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Services\ApiResponse;
+use App\Services\UserService;
+use Illuminate\Http\Request;
+use App\Models\User;
+use App\Http\Requests\Auth\UserRequest;
+use App\Http\Resources\UserResource;
+use Symfony\Component\HttpFoundation\Response;
+
+class UserController extends Controller
+{
+    public function __construct(
+        private UserService $service, 
+        private ApiResponse $apiResponse,
+        ) {}
+
+    public function index(Request $request)
+    {
+        $role = $request->query('role');
+        $users = $this->service->getAllUsers($role);
+        return $this->apiResponse->success(
+            UserResource::collection($users), 
+            'Usuarios obtenidos exitosamente', 
+            Response::HTTP_OK);
+    }
+
+    public function update(UserRequest $request, int $id)
+    {
+        $user = $this->service->getUserById($id);
+        $updatedUser = $this->service->updateUser($user, $request->validated());
+
+        return $this->apiResponse->success(
+            new UserResource($updatedUser), 
+            'Usuario actualizado exitosamente', 
+            Response::HTTP_OK);
+    }
+
+    public function destroy(User $id)
+    {
+        if (!auth()->check() || auth()->user()->role !== 'admin') 
+            return $this->apiResponse->error('No tienes permiso para eliminar usuarios.', Response::HTTP_FORBIDDEN);
+
+        $id->delete();
+        return $this->apiResponse->success(
+            null, 
+            'Usuario eliminado exitosamente', 
+            Response::HTTP_OK);
     }
 }
 </file>
@@ -5177,134 +4923,118 @@ class UserResource extends JsonResource
     public function toArray(Request $request): array
     {
         return [
-            'id'             => $this->id,
-            'name'           => $this->name,
-            'lastname'       => $this->lastname,
-            'email'          => $this->email,
-            'phone'          => $this->phone,
-            'role'           => $this->role,
-            'avatar_url'     => $this->whenLoaded('avatar', fn() => $this->avatar?->drive_url),
-            'haircut_photos' => $this->whenLoaded('haircutPhotos',
-                fn() => MediaResource::collection($this->haircutPhotos)
-            ),
+            'id'         => $this->id,
+            'name'       => $this->name,
+            'lastname'   => $this->lastname,
+            'email'      => $this->email,
+            'phone'      => $this->phone,
+            'role'       => $this->role,
         ];
     }
 }
 </file>
 
-<file path="app/Services/LoggerService.php">
+<file path="app/Models/Service.php">
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
+
+class Service extends Model
+{
+    use SoftDeletes;
+
+    protected $fillable = [
+        'name',
+        'description',
+        'price',
+        'duration_min',
+        'active',
+    ];
+
+    protected $casts = [
+        'price'  => 'decimal:2',
+        'active' => 'boolean',
+    ];
+
+    public function appointments(): BelongsToMany
+    {
+        return $this->belongsToMany(Appointment::class, 'appointment_services')
+                    ->withPivot('price_at_time');
+    }
+
+    // Solo servicios activos para agendar
+    public function scopeActive($query)
+    {
+        return $query->where('active', true);
+    }
+}
+</file>
+
+<file path="app/Providers/AppServiceProvider.php">
+<?php
+
+namespace App\Providers;
+
+use App\Models\Appointment;
+use App\Models\User;
+use App\Policies\AppointmentPolicy;
+use App\Policies\UserPolicy;
+use Illuminate\Foundation\Support\Providers\AuthServiceProvider as ServiceProvider;
+
+class AppServiceProvider extends ServiceProvider
+{
+    protected $policies = [
+        Appointment::class => AppointmentPolicy::class,
+        User::class        => UserPolicy::class,
+    ];
+
+    public function register(): void
+    {
+        //
+    }
+
+    public function boot(): void
+    {
+        $this->registerPolicies();
+    }
+}
+</file>
+
+<file path="app/Services/UserService.php">
 <?php
 
 namespace App\Services;
 
-use Illuminate\Support\Facades\Log;
-use App\Models\Appointment;
-use App\Models\Payment;
-use App\Models\Expense;
-use App\Models\Media;
+use App\Models\User;
 
-class LoggerService
+class UserService
 {
-    public function index(): void
+
+
+    public function getAllUsers(?string $role = null)
     {
-        Log::info("index method called in " . __CLASS__);
+        $query = User::query();
+
+        if ($role) {
+            $query->where('role', $role);
+        }
+
+        return $query->paginate(10); 
     }
 
-    public function update($id): void
+    public function getUserById($id)
     {
-        Log::info("update method called in " . __CLASS__, [
-            'user_id' => $id
-        ]);
+        return User::findOrFail($id);
     }
 
-    public function destroy($id): void
+    public function updateUser(User $user, array $data)
     {
-        Log::info("destroy method called in " . __CLASS__, [
-            'user_id' => $id
-        ]);
-    }
-
-    public function userCreatedByAdmin($user): void
-    {
-        Log::info('User created by admin', [
-            'created_by' => auth()->id(),
-            'new_user_id' => $user->id,
-        ]);
-    }
-
-    public function userLoggedIn($user): void
-    {
-        Log::info('User logged in', [
-            'user_id' => $user->id,
-        ]);
-    }
-
-    public function userLoggedOut($user): void
-    {
-        Log::info('User logged out', [
-            'user_id' => $user->id,
-        ]);
-    }
-
-    public function userChangedPassword($user): void
-    {
-        Log::info('User changed password', [
-            'user_id' => $user->id,
-        ]);
-    }
-
-    // En LoggerService.php
-
-    public function appointmentCreated(Appointment $appointment): void
-    {
-        Log::info('Appointment created', [
-            'created_by' => auth()->id(),
-            'appointment_id' => $appointment->id,
-            'client_id' => $appointment->client_id,
-            'barber_id' => $appointment->barber_id,
-            'date' => $appointment->appointment_date,
-        ]);
-    }
-
-    public function appointmentStatusChanged(Appointment $appointment): void
-    {
-        Log::info('Appointment status changed', [
-            'changed_by' => auth()->id(),
-            'appointment_id' => $appointment->id,
-            'new_status' => $appointment->status,
-        ]);
-    }
-
-    public function paymentRegistered(Payment $payment): void
-    {
-        Log::info('Payment registered', [
-            'registered_by' => auth()->id(),
-            'payment_id' => $payment->id,
-            'appointment_id' => $payment->appointment_id,
-            'amount' => $payment->amount,
-            'method' => $payment->method,
-        ]);
-    }
-
-    public function expenseRegistered(Expense $expense): void
-    {
-        Log::info('Expense registered', [
-            'registered_by' => auth()->id(),
-            'expense_id' => $expense->id,
-            'amount' => $expense->amount,
-            'category_id' => $expense->category_id,
-        ]);
-    }
-
-    public function mediaUploaded(Media $media): void
-    {
-        Log::info('Media uploaded', [
-            'uploaded_by' => auth()->id(),
-            'media_id' => $media->id,
-            'model_type' => $media->model_type,
-            'model_id' => $media->model_id,
-            'collection' => $media->collection,
-        ]);
+        $user->update($data);
+        return $user;
     }
 
 }
@@ -5401,6 +5131,81 @@ class LoggerService
 }
 </file>
 
+<file path="database/seeders/DatabaseSeeder.php">
+<?php
+
+namespace Database\Seeders;
+
+use Illuminate\Database\Seeder;
+use Illuminate\Database\Console\Seeds\WithoutModelEvents;
+
+class DatabaseSeeder extends Seeder
+{
+    use WithoutModelEvents;
+
+    public function run(): void
+    {
+        $this->call([
+            AdminUserSeeder::class,
+            ServiceSeeder::class,
+            ExpenseCategorySeeder::class,
+        ]);
+    }
+}
+</file>
+
+<file path="README.md">
+<div align="center">
+
+# Backend Barberia Felix
+
+![PHP](https://img.shields.io/badge/PHP-777BB4?style=for-the-badge&logo=php&logoColor=white)![Laravel](https://img.shields.io/badge/Laravel-FF2D20?style=for-the-badge&logo=laravel&logoColor=white)![MySQL](https://img.shields.io/badge/MySQL-4479A1?style=for-the-badge&logo=mysql&logoColor=white)
+
+</div>
+
+Este proyecto es el backend para la gestión de una barbería, desarrollado con Laravel y MySQL. Proporciona una API segura y escalable para manejar usuarios, roles y autenticación mediante Laravel Sanctum. Incluye funcionalidades como registro y login, administración de barberos y clientes, gestión de citas y control de financiero del negocio.
+</file>
+
+<file path="app/Http/Requests/Auth/UserRequest.php">
+<?php
+
+namespace App\Http\Requests\Auth;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Contracts\Validation\Validator;
+use Illuminate\Http\Exceptions\HttpResponseException;
+use Illuminate\Validation\Rule;
+
+class UserRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'name' => ['required', 'string', 'max:255'],
+            'lastname' => ['nullable', 'string', 'max:255'],
+            'email' => [
+                'required', 
+                'email:rfc,dns', 
+                'unique:users,email,' . $this->route('id')],
+            'phone' => ['nullable', 'string', 'max:20'],
+            'role' => ['required', 'in:admin,barber,receptionist,client'],
+        ];
+    }
+
+    protected function failedValidation(Validator $validator): never
+    {
+        throw new HttpResponseException(
+            response()->json(['errors' => $validator->errors()], 422)
+        );
+    }
+}
+</file>
+
 <file path="config/app.php">
 <?php
 
@@ -5469,7 +5274,7 @@ return [
     |
     */
 
-    'timezone' => 'UTC',
+    'timezone' => env('APP_TIMEZONE', 'America/Mexico_City'),
 
     /*
     |--------------------------------------------------------------------------
@@ -5530,18 +5335,6 @@ return [
 ];
 </file>
 
-<file path="README.md">
-<div align="center">
-
-# Backend Barberia Felix
-
-![PHP](https://img.shields.io/badge/PHP-777BB4?style=for-the-badge&logo=php&logoColor=white)![Laravel](https://img.shields.io/badge/Laravel-FF2D20?style=for-the-badge&logo=laravel&logoColor=white)![MySQL](https://img.shields.io/badge/MySQL-4479A1?style=for-the-badge&logo=mysql&logoColor=white)
-
-</div>
-
-Este proyecto es el backend para la gestión de una barbería, desarrollado con Laravel y MySQL. Proporciona una API segura y escalable para manejar usuarios, roles y autenticación mediante Laravel Sanctum. Incluye funcionalidades como registro y login, administración de barberos y clientes, gestión de citas y control de financiero del negocio.
-</file>
-
 <file path="app/Models/User.php">
 <?php
 
@@ -5552,8 +5345,6 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\MorphMany;
-use Illuminate\Database\Eloquent\Relations\MorphOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -5576,23 +5367,6 @@ class User extends Authenticatable
         ];
     }
 
-    public function media(): MorphMany
-    {
-        return $this->morphMany(Media::class, 'model');
-    }
-
-    public function avatar(): MorphOne
-    {
-        return $this->morphOne(Media::class, 'model')
-            ->where('collection', 'avatar');
-    }
-
-    public function haircutPhotos(): MorphMany
-    {
-        return $this->morphMany(Media::class, 'model')
-            ->where('collection', 'haircut');
-    }
-
     public function appointmentsAsClient(): HasMany
     {
         return $this->hasMany(Appointment::class, 'client_id');
@@ -5601,11 +5375,6 @@ class User extends Authenticatable
     public function appointmentsAsBarber(): HasMany
     {
         return $this->hasMany(Appointment::class, 'barber_id');
-    }
-
-    public function paymentsReceived(): HasMany
-    {
-        return $this->hasMany(Payment::class, 'received_by');
     }
 
     public function scopeBarbers($query)
@@ -5621,9 +5390,7 @@ class User extends Authenticatable
 </file>
 
 <file path="docs/API_DOCS.md">
-# Documentación API - Auth
-
-Base URL: `http://localhost:8000/api`
+# Documentación API - Barbería Félix
 
 Las rutas protegidas requieren enviar el token en el header:
 ```
@@ -5632,7 +5399,22 @@ Authorization: Bearer {token}
 
 ---
 
-## 1. Crear usuario
+## Índice
+
+- [Auth](#auth)
+- [Usuarios](#usuarios)
+- [Servicios](#servicios)
+- [Citas](#citas)
+- [Pagos](#pagos)
+- [Gastos](#gastos)
+- [Reporte Financiero](#reporte-financiero)
+
+---
+
+## Auth
+
+### 1. Crear usuario
+
 **Solo el admin puede usar este endpoint.**
 
 ```
@@ -5650,13 +5432,14 @@ Authorization: Bearer {token}
     "role": "barber"
 }
 ```
+
 > `role` acepta: `admin`, `barber`, `receptionist`, `client`.
-> `lastname` y `phone` son opcionales
+> `lastname` y `phone` son opcionales.
 
 **Respuesta exitosa — 201:**
 ```json
 {
-    "success": true
+    "success": true,
     "message": "usuario creado con contraseña por defecto 12345678.",
     "data": {
         "id": 1,
@@ -5670,62 +5453,15 @@ Authorization: Bearer {token}
 ```
 
 **Errores posibles:**
-| Código | Motivo                                          |Respuesta  |
-|--------|-------------------------------------------------|-----------|
-| 401    | No enviaste el token                            | Fig. 1    |
-| 403    | No eres admin                                   | Fig. 2    |
-| 422    | Falta un campo obligatorio o el email ya existe | Fig. 3, 4 |
-
-Fig. 1
-
-```json
-{
-  "message": "Unauthenticated."
-}
-```
-
-Fig. 2
-
-```json
-{
-  "success": false,
-  "message": "No tienes permiso para crear usuarios."
-}
-```
-
-Fig. 3
-
-```json
-{
-  "errors": {
-    "name": [
-      "The name field is required."
-    ],
-    "email": [
-      "The email field is required."
-    ],
-    "role": [
-      "The role field is required."
-    ]
-  }
-}
-```
-
-Fig. 4
-
-```json
-{
-  "errors": {
-    "email": [
-      "The email has already been taken."
-    ]
-  }
-}
-```
+| Código | Motivo                                          |
+|--------|-------------------------------------------------|
+| 401    | No enviaste el token                            |
+| 403    | No eres admin                                   |
+| 422    | Falta un campo obligatorio o el email ya existe |
 
 ---
 
-## 2. Login
+### 2. Login
 
 ```
 POST /login
@@ -5742,7 +5478,7 @@ POST /login
 **Respuesta exitosa — 200:**
 ```json
 {
-    "success": true
+    "success": true,
     "message": "Inicio de sesión exitoso.",
     "access_token": "1|abc123...",
     "token_type": "Bearer",
@@ -5752,56 +5488,25 @@ POST /login
         "name": "Juan",
         "lastname": "Pérez",
         "email": "juan@email.com",
+        "phone": "1234567890",
         "role": "barber"
     }
 }
 ```
+
 > [!IMPORTANT]
->Si `must_change_password` es `true`, redirige al usuario a la pantalla de cambio de contraseña antes de dejarlo usar la app. Guarda el `access_token` para usarlo en las demás peticiones.
+> Si `must_change_password` es `true`, redirige al usuario a la pantalla de cambio de contraseña antes de dejarlo usar la app. Guarda el `access_token` para usarlo en las demás peticiones.
 
 **Errores posibles:**
-| Código | Motivo                                          | Respuesta |
-|--------|-------------------------------------------------|-----------|
-| 401 | Email o contraseña incorrectos                     | Fig. 1    |
-| 422 | Falta email o contraseña en el body                | Fig. 2    |
-| 429 | Demasiados intentos fallidos, espera unos segundos | Fig. 3    |
-
-Fig. 1
-
-```json
-{
-  "success": false,
-  "message": "Credenciales inválidas."
-}
-```
-
-Fig. 2
-
-```json
-{
-  "errors": {
-    "email": [
-      "The email field is required."
-    ],
-    "password": [
-      "The password field is required."
-    ]
-  }
-}
-```
-
-Fig. 3
-
-```json
-{
-  "success": false,
-  "message": "Demasiados intentos de inicio de sesión. Inténtalo de nuevo en 60 segundos."
-}
-```
+| Código | Motivo                                             |
+|--------|----------------------------------------------------|
+| 401    | Email o contraseña incorrectos                     |
+| 422    | Falta email o contraseña en el body                |
+| 429    | Demasiados intentos fallidos, espera unos segundos |
 
 ---
 
-## 3. Cambiar contraseña
+### 3. Cambiar contraseña
 
 ```
 POST /change-password
@@ -5823,41 +5528,24 @@ Authorization: Bearer {token}
 **Respuesta exitosa — 200:**
 ```json
 {
-    "message": "Contraseña actualizada correctamente. Por favor, inicie sesión de nuevo."
+    "success": true,
+    "message": "Contraseña actualizada correctamente. Por favor, inicie sesión de nuevo.",
+    "data": null
 }
 ```
+
 > [!IMPORTANT]
->Cuando recibas esta respuesta, elimina el token guardado y manda al usuario al login. El token anterior ya no sirve.
+> Cuando recibas esta respuesta, elimina el token guardado y manda al usuario al login. El token anterior ya no sirve.
 
 **Errores posibles:**
-| Código | Motivo                                                                 | Respuesta |
-|--------|------------------------------------------------------------------------|-----------|
-| 401    | No enviaste el token                                                   | Fig. 1    |
-| 422    | La contraseña actual es incorrecta o la nueva no cumple los requisitos | Fig. 2    |
+| Código | Motivo                                                                 |
+|--------|------------------------------------------------------------------------|
+| 401    | No enviaste el token o la contraseña actual es incorrecta              |
+| 422    | La nueva contraseña no cumple los requisitos o la confirmación no coincide |
 
-Fig. 1
-
-```json
-{
-  "message": "Unauthenticated."
-}
-```
-
-Fig. 2
-
-```json
-{
-  "errors": {
-    "new_password": [
-      "The new password field confirmation does not match.",
-      "The new password field format is invalid."
-    ]
-  }
-}
-```
 ---
 
-## 4. Logout
+### 4. Logout
 
 ```
 POST /logout
@@ -5867,28 +5555,23 @@ Authorization: Bearer {token}
 **Respuesta exitosa — 200:**
 ```json
 {
-    "message": "Cierre de sesión exitoso."
+    "success": true,
+    "message": "Cierre de sesión exitoso.",
+    "data": null
 }
 ```
+
 > [!IMPORTANT]
->Cuando recibas esta respuesta, elimina el token guardado y redirige al login.
+> Cuando recibas esta respuesta, elimina el token guardado y redirige al login.
 
 **Errores posibles:**
-| Código | Motivo                                    | Respuesta |
-|--------|-------------------------------------------|-----------|
-| 401    | No enviaste el token o ya estaba expirado | Fig. 1    |
-
-Fig. 1
-
-```json
-{
-  "message": "Unauthenticated."
-}
-```
+| Código | Motivo                                    |
+|--------|-------------------------------------------|
+| 401    | No enviaste el token o ya estaba expirado |
 
 ---
 
-## Flujo general
+### Flujo general
 
 ```
 1. Login → guardar access_token
@@ -5898,6 +5581,780 @@ Fig. 1
 5. Usar la app con normalidad
 6. Logout → eliminar token → ir al login
 ```
+
+---
+
+## Usuarios
+
+### 1. Listar usuarios
+
+**Solo admin y recepcionistas pueden usar este endpoint.**
+
+```
+GET /users
+Authorization: Bearer {token}
+```
+
+**Query params opcionales:**
+| Parámetro | Tipo   | Descripción                                          |
+|-----------|--------|------------------------------------------------------|
+| `role`    | string | Filtra por rol: `admin`, `barber`, `receptionist`, `client` |
+
+**Respuesta exitosa — 200:**
+```json
+{
+    "success": true,
+    "message": "Usuarios obtenidos exitosamente",
+    "data": {
+        "data": [
+            {
+                "id": 1,
+                "name": "Juan",
+                "lastname": "Pérez",
+                "email": "juan@email.com",
+                "phone": "1234567890",
+                "role": "barber"
+            }
+        ],
+        "current_page": 1,
+        "last_page": 1,
+        "per_page": 10,
+        "total": 1
+    }
+}
+```
+
+**Errores posibles:**
+| Código | Motivo               |
+|--------|----------------------|
+| 401    | No enviaste el token |
+
+---
+
+### 2. Actualizar usuario
+
+**Cada usuario puede editarse a sí mismo. Los admins pueden editar a cualquiera.**
+
+```
+PUT /users/{id}
+Authorization: Bearer {token}
+```
+
+**Body:**
+```json
+{
+    "name": "Juan",
+    "lastname": "Pérez",
+    "email": "juan@email.com",
+    "phone": "1234567890",
+    "role": "barber"
+}
+```
+
+> `lastname` y `phone` son opcionales.
+> `role` acepta: `admin`, `barber`, `receptionist`, `client`.
+
+**Respuesta exitosa — 200:**
+```json
+{
+    "success": true,
+    "message": "Usuario actualizado exitosamente",
+    "data": {
+        "id": 1,
+        "name": "Juan",
+        "lastname": "Pérez",
+        "email": "juan@email.com",
+        "phone": "1234567890",
+        "role": "barber"
+    }
+}
+```
+
+**Errores posibles:**
+| Código | Motivo                                          |
+|--------|-------------------------------------------------|
+| 401    | No enviaste el token                            |
+| 403    | No tienes permiso para editar ese usuario       |
+| 422    | Falta un campo obligatorio o el email ya existe |
+| 404    | Usuario no encontrado                           |
+
+---
+
+### 3. Eliminar usuario
+
+**Solo el admin puede usar este endpoint. No puede eliminarse a sí mismo.**
+
+```
+DELETE /users/{id}
+Authorization: Bearer {token}
+```
+
+**Respuesta exitosa — 200:**
+```json
+{
+    "success": true,
+    "message": "Usuario eliminado exitosamente",
+    "data": null
+}
+```
+
+**Errores posibles:**
+| Código | Motivo                                    |
+|--------|-------------------------------------------|
+| 401    | No enviaste el token                      |
+| 403    | No eres admin                             |
+| 404    | Usuario no encontrado                     |
+
+---
+
+## Servicios
+
+### 1. Listar servicios
+
+**Cualquier usuario autenticado puede ver los servicios activos.**
+
+```
+GET /services
+Authorization: Bearer {token}
+```
+
+**Respuesta exitosa — 200:**
+```json
+{
+    "success": true,
+    "message": "Servicios obtenidos exitosamente",
+    "data": [
+        {
+            "id": 1,
+            "name": "Corte clásico",
+            "description": "Corte de cabello estilo clásico.",
+            "price": 120.00,
+            "duration_min": 30,
+            "active": true
+        }
+    ]
+}
+```
+
+---
+
+### 2. Crear servicio
+
+**Solo el admin puede usar este endpoint.**
+
+```
+POST /services
+Authorization: Bearer {token}
+```
+
+**Body:**
+```json
+{
+    "name": "Corte clásico",
+    "description": "Corte de cabello estilo clásico.",
+    "price": 120.00,
+    "duration_min": 30,
+    "active": true
+}
+```
+
+> `description` y `active` son opcionales. `active` es `true` por defecto.
+> `duration_min` debe ser entre 1 y 480 minutos.
+> `price` debe ser mayor a 0.
+
+**Respuesta exitosa — 201:**
+```json
+{
+    "success": true,
+    "message": "Servicio creado exitosamente",
+    "data": {
+        "id": 1,
+        "name": "Corte clásico",
+        "description": "Corte de cabello estilo clásico.",
+        "price": 120.00,
+        "duration_min": 30,
+        "active": true
+    }
+}
+```
+
+**Errores posibles:**
+| Código | Motivo                         |
+|--------|--------------------------------|
+| 401    | No enviaste el token           |
+| 403    | No eres admin                  |
+| 422    | Falta un campo obligatorio     |
+
+---
+
+### 3. Actualizar servicio
+
+**Solo el admin puede usar este endpoint.**
+
+```
+PUT /services/{id}
+Authorization: Bearer {token}
+```
+
+**Body:** Mismos campos que en crear servicio.
+
+**Respuesta exitosa — 200:**
+```json
+{
+    "success": true,
+    "message": "Servicio actualizado exitosamente",
+    "data": {
+        "id": 1,
+        "name": "Corte clásico",
+        "description": "Corte de cabello estilo clásico.",
+        "price": 120.00,
+        "duration_min": 30,
+        "active": true
+    }
+}
+```
+
+**Errores posibles:**
+| Código | Motivo                         |
+|--------|--------------------------------|
+| 401    | No enviaste el token           |
+| 403    | No eres admin                  |
+| 404    | Servicio no encontrado         |
+| 422    | Falta un campo obligatorio     |
+
+---
+
+### 4. Eliminar servicio
+
+**Solo el admin puede usar este endpoint. Realiza un soft delete.**
+
+```
+DELETE /services/{id}
+Authorization: Bearer {token}
+```
+
+**Respuesta exitosa — 200:**
+```json
+{
+    "success": true,
+    "message": "Servicio eliminado exitosamente",
+    "data": null
+}
+```
+
+**Errores posibles:**
+| Código | Motivo                 |
+|--------|------------------------|
+| 401    | No enviaste el token   |
+| 403    | No eres admin          |
+| 404    | Servicio no encontrado |
+
+---
+
+## Citas
+
+### 1. Listar citas
+
+**Todos los roles pueden listar citas. El sistema filtra según el rol del usuario.**
+
+```
+GET /appointments
+Authorization: Bearer {token}
+```
+
+**Query params opcionales:**
+| Parámetro   | Tipo   | Descripción                                                                 |
+|-------------|--------|-----------------------------------------------------------------------------|
+| `date`      | date   | Filtra por fecha exacta (formato `YYYY-MM-DD`)                              |
+| `barber_id` | int    | Filtra por barbero                                                           |
+| `status`    | string | Filtra por estado: `pending`, `confirmed`, `in_progress`, `completed`, `cancelled`, `no_show` |
+
+**Respuesta exitosa — 200:**
+```json
+{
+    "success": true,
+    "message": "Citas obtenidas exitosamente",
+    "data": {
+        "data": [
+            {
+                "id": 1,
+                "status": "pending",
+                "appointment_date": "2026-06-01",
+                "start_time": "10:00",
+                "end_time": "10:30",
+                "total_price": 120.00,
+                "notes": "Sin notas",
+                "client": {
+                    "id": 3,
+                    "name": "Carlos",
+                    "lastname": "López",
+                    "email": "carlos@email.com",
+                    "phone": null,
+                    "role": "client"
+                },
+                "barber": {
+                    "id": 2,
+                    "name": "Juan",
+                    "lastname": "Pérez",
+                    "email": "juan@email.com",
+                    "phone": null,
+                    "role": "barber"
+                },
+                "services": [
+                    {
+                        "id": 1,
+                        "name": "Corte clásico",
+                        "description": "Corte de cabello estilo clásico.",
+                        "price": 120.00,
+                        "duration_min": 30,
+                        "active": true,
+                        "price_at_time": 120.00
+                    }
+                ],
+                "payment": null
+            }
+        ],
+        "current_page": 1,
+        "last_page": 1,
+        "per_page": 10,
+        "total": 1
+    }
+}
+```
+
+---
+
+### 2. Crear cita
+
+**Admin, recepcionistas y clientes pueden crear citas.**
+
+```
+POST /appointments
+Authorization: Bearer {token}
+```
+
+**Body:**
+```json
+{
+    "client_id": 3,
+    "barber_id": 2,
+    "service_ids": [1, 3],
+    "appointment_date": "2026-06-01",
+    "start_time": "10:00",
+    "notes": "Sin notas"
+}
+```
+
+> `notes` es opcional.
+> `appointment_date` no puede ser una fecha pasada.
+> `start_time` debe tener formato `HH:MM`.
+> `service_ids` debe contener al menos un servicio existente.
+> `client_id` y `barber_id` deben ser diferentes.
+> El `end_time` se calcula automáticamente sumando la duración de todos los servicios.
+> El sistema verifica que el barbero no tenga otra cita activa en ese horario.
+
+**Respuesta exitosa — 201:**
+```json
+{
+    "success": true,
+    "message": "Cita creada exitosamente",
+    "data": {
+        "id": 1,
+        "status": "pending",
+        "appointment_date": "2026-06-01",
+        "start_time": "10:00",
+        "end_time": "10:50",
+        "total_price": 200.00,
+        "notes": "Sin notas",
+        "client": { "..." },
+        "barber": { "..." },
+        "services": [ { "..." } ],
+        "payment": null
+    }
+}
+```
+
+**Errores posibles:**
+| Código | Motivo                                              |
+|--------|-----------------------------------------------------|
+| 401    | No enviaste el token                                |
+| 409    | El barbero no está disponible en ese horario        |
+| 422    | Falta un campo obligatorio o algún ID no existe     |
+
+---
+
+### 3. Actualizar estado de cita
+
+**Admins y recepcionistas pueden cambiar cualquier estado. Los barberos solo pueden actualizar sus propias citas.**
+
+```
+PATCH /appointments/{id}/status
+Authorization: Bearer {token}
+```
+
+**Body:**
+```json
+{
+    "status": "confirmed"
+}
+```
+
+> `status` acepta: `pending`, `confirmed`, `in_progress`, `completed`, `cancelled`, `no_show`.
+
+**Respuesta exitosa — 200:**
+```json
+{
+    "success": true,
+    "message": "Estado de cita actualizado",
+    "data": {
+        "id": 1,
+        "status": "confirmed",
+        "..."
+    }
+}
+```
+
+**Errores posibles:**
+| Código | Motivo                             |
+|--------|------------------------------------|
+| 401    | No enviaste el token               |
+| 422    | El status enviado no es válido     |
+| 404    | Cita no encontrada                 |
+
+---
+
+### 4. Cancelar cita
+
+**Solo admins y recepcionistas pueden cancelar citas. Realiza un soft delete.**
+
+```
+DELETE /appointments/{id}
+Authorization: Bearer {token}
+```
+
+**Respuesta exitosa — 200:**
+```json
+{
+    "success": true,
+    "message": "Cita cancelada exitosamente",
+    "data": null
+}
+```
+
+**Errores posibles:**
+| Código | Motivo                 |
+|--------|------------------------|
+| 401    | No enviaste el token   |
+| 403    | No tienes permiso      |
+| 404    | Cita no encontrada     |
+
+---
+
+## Pagos
+
+### 1. Listar pagos
+
+**Cualquier usuario autenticado puede ver pagos.**
+
+```
+GET /payments
+Authorization: Bearer {token}
+```
+
+**Query params opcionales:**
+| Parámetro        | Tipo   | Descripción                                      |
+|------------------|--------|--------------------------------------------------|
+| `appointment_id` | int    | Filtra por cita                                   |
+| `status`         | string | Filtra por estado: `pending`, `completed`, `refunded` |
+| `method`         | string | Filtra por método: `cash`, `card`, `transfer`, `other` |
+
+**Respuesta exitosa — 200:**
+```json
+{
+    "success": true,
+    "message": "Pagos obtenidos exitosamente",
+    "data": {
+        "data": [
+            {
+                "id": 1,
+                "amount": 200.00,
+                "method": "cash",
+                "status": "completed",
+                "reference": null,
+                "paid_at": "2026-06-01 10:55:00",
+                "received_by": {
+                    "id": 4,
+                    "name": "Ana",
+                    "lastname": "García",
+                    "email": "ana@email.com",
+                    "phone": null,
+                    "role": "receptionist"
+                }
+            }
+        ],
+        "current_page": 1,
+        "last_page": 1,
+        "per_page": 20,
+        "total": 1
+    }
+}
+```
+
+---
+
+### 2. Registrar pago
+
+**Cualquier usuario autenticado puede registrar pagos.**
+
+```
+POST /payments
+Authorization: Bearer {token}
+```
+
+**Body:**
+```json
+{
+    "appointment_id": 1,
+    "amount": 200.00,
+    "method": "cash",
+    "reference": null,
+    "paid_at": "2026-06-01 10:55:00"
+}
+```
+
+> `reference` y `paid_at` son opcionales. Si no se envía `paid_at`, se usa la fecha y hora actual.
+> `method` acepta: `cash`, `card`, `transfer`, `other`.
+> Si el monto cubre el total de la cita, esta se marca automáticamente como `completed`.
+
+**Respuesta exitosa — 201:**
+```json
+{
+    "success": true,
+    "message": "Pago registrado exitosamente",
+    "data": {
+        "id": 1,
+        "amount": 200.00,
+        "method": "cash",
+        "status": "completed",
+        "reference": null,
+        "paid_at": "2026-06-01 10:55:00",
+        "received_by": { "..." }
+    }
+}
+```
+
+**Errores posibles:**
+| Código | Motivo                                      |
+|--------|---------------------------------------------|
+| 401    | No enviaste el token                        |
+| 422    | Falta un campo obligatorio o datos inválidos|
+
+---
+
+## Gastos
+
+### 1. Listar gastos
+
+**Solo admins y recepcionistas pueden ver gastos.**
+
+```
+GET /expenses
+Authorization: Bearer {token}
+```
+
+**Query params opcionales:**
+| Parámetro     | Tipo   | Descripción                              |
+|---------------|--------|------------------------------------------|
+| `category_id` | int    | Filtra por categoría de gasto            |
+| `from`        | date   | Fecha de inicio del rango (`YYYY-MM-DD`) |
+| `to`          | date   | Fecha de fin del rango (`YYYY-MM-DD`)    |
+
+**Respuesta exitosa — 200:**
+```json
+{
+    "success": true,
+    "message": "Gastos obtenidos exitosamente",
+    "data": {
+        "data": [
+            {
+                "id": 1,
+                "description": "Compra de productos",
+                "amount": 500.00,
+                "expense_date": "2026-06-01",
+                "category": {
+                    "id": 2,
+                    "name": "Productos",
+                    "color": "#F59E0B"
+                },
+                "registered_by": {
+                    "id": 4,
+                    "name": "Ana",
+                    "lastname": "García",
+                    "email": "ana@email.com",
+                    "phone": null,
+                    "role": "receptionist"
+                },
+                "created_at": "2026-06-01 09:00:00"
+            }
+        ],
+        "current_page": 1,
+        "last_page": 1,
+        "per_page": 20,
+        "total": 1
+    }
+}
+```
+
+---
+
+### 2. Registrar gasto
+
+**Solo admins y recepcionistas pueden registrar gastos.**
+
+```
+POST /expenses
+Authorization: Bearer {token}
+```
+
+**Body:**
+```json
+{
+    "category_id": 2,
+    "description": "Compra de productos",
+    "amount": 500.00,
+    "expense_date": "2026-06-01"
+}
+```
+
+> `amount` debe ser mayor a 0.
+> `category_id` debe existir en la tabla de categorías.
+
+**Categorías disponibles por defecto:**
+| ID | Nombre       | Color     |
+|----|--------------|-----------|
+| 1  | Renta        | `#EF4444` |
+| 2  | Productos    | `#F59E0B` |
+| 3  | Servicios    | `#3B82F6` |
+| 4  | Nómina       | `#8B5CF6` |
+| 5  | Equipamiento | `#10B981` |
+| 6  | Otros        | `#6B7280` |
+
+**Respuesta exitosa — 201:**
+```json
+{
+    "success": true,
+    "message": "Gasto registrado exitosamente",
+    "data": {
+        "id": 1,
+        "description": "Compra de productos",
+        "amount": 500.00,
+        "expense_date": "2026-06-01",
+        "category": {
+            "id": 2,
+            "name": "Productos",
+            "color": "#F59E0B"
+        },
+        "registered_by": { "..." },
+        "created_at": "2026-06-01 09:00:00"
+    }
+}
+```
+
+**Errores posibles:**
+| Código | Motivo                                       |
+|--------|----------------------------------------------|
+| 401    | No enviaste el token                         |
+| 403    | No eres admin ni recepcionista               |
+| 422    | Falta un campo obligatorio o datos inválidos |
+
+---
+
+### 3. Eliminar gasto
+
+**Solo el admin puede eliminar gastos. Realiza un soft delete.**
+
+```
+DELETE /expenses/{id}
+Authorization: Bearer {token}
+```
+
+**Respuesta exitosa — 200:**
+```json
+{
+    "success": true,
+    "message": "Gasto eliminado exitosamente",
+    "data": null
+}
+```
+
+**Errores posibles:**
+| Código | Motivo                 |
+|--------|------------------------|
+| 401    | No enviaste el token   |
+| 403    | No eres admin          |
+| 404    | Gasto no encontrado    |
+
+---
+
+## Reporte Financiero
+
+### 1. Resumen financiero por período
+
+**Solo el admin puede ver reportes financieros.**
+
+```
+GET /financial/summary
+Authorization: Bearer {token}
+```
+
+**Query params requeridos:**
+| Parámetro | Tipo | Descripción                              |
+|-----------|------|------------------------------------------|
+| `from`    | date | Fecha de inicio del período (`YYYY-MM-DD`) |
+| `to`      | date | Fecha de fin del período (`YYYY-MM-DD`)    |
+
+> `to` debe ser igual o posterior a `from`.
+
+**Respuesta exitosa — 200:**
+```json
+{
+    "success": true,
+    "message": "Reporte financiero generado exitosamente",
+    "data": {
+        "period": {
+            "from": "2026-06-01",
+            "to": "2026-06-30"
+        },
+        "income": 5400.00,
+        "expenses": 1200.00,
+        "net_profit": 4200.00,
+        "by_barber": {
+            "Juan Pérez": 3200.00,
+            "Miguel Torres": 2200.00
+        },
+        "by_category": {
+            "Productos": 700.00,
+            "Renta": 500.00
+        }
+    }
+}
+```
+
+**Descripción de campos:**
+| Campo          | Descripción                                              |
+|----------------|----------------------------------------------------------|
+| `income`       | Total de ingresos por pagos completados en el período    |
+| `expenses`     | Total de gastos registrados en el período                |
+| `net_profit`   | Diferencia entre ingresos y gastos                       |
+| `by_barber`    | Ingresos desglosados por barbero                         |
+| `by_category`  | Gastos desglosados por categoría                         |
+
+**Errores posibles:**
+| Código | Motivo                                           |
+|--------|--------------------------------------------------|
+| 401    | No enviaste el token                             |
+| 403    | No eres admin                                    |
+| 422    | Faltan los parámetros `from` / `to` o son inválidos |
 </file>
 
 <file path="routes/api.php">
@@ -5911,49 +6368,45 @@ use App\Http\Controllers\AppointmentController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\ExpenseController;
 use App\Http\Controllers\FinancialController;
-use App\Http\Controllers\MediaController;
 
 Route::post('login', [AuthController::class, 'login']);
 
 Route::middleware('auth:sanctum')->group(function () {
 
     // ── Auth ──────────────────────────────────────────────────
-    Route::post('register',         [AuthController::class, 'register']);
-    Route::post('change-password',  [AuthController::class, 'changePassword']);
-    Route::post('logout',           [AuthController::class, 'logout']);
+    Route::post('register', [AuthController::class, 'register']);
+    Route::post('change-password', [AuthController::class, 'changePassword']);
+    Route::post('logout', [AuthController::class, 'logout']);
 
     // ── Usuarios ──────────────────────────────────────────────
-    Route::get('users',             [UserController::class, 'index']);
-    Route::put('users/{id}',        [UserController::class, 'update']);
-    Route::delete('users/{id}',     [UserController::class, 'destroy']);
-
-    // ── Media (fotos de perfil y corte) ───────────────────────
-    Route::post('users/{user}/media',   [MediaController::class, 'store']);
-    Route::delete('media/{media}',      [MediaController::class, 'destroy']);
+    Route::get('users', [UserController::class, 'index']);
+    Route::put('users/{id}', [UserController::class, 'update']);
+    Route::delete('users/{id}', [UserController::class, 'destroy']);
 
     // ── Servicios ─────────────────────────────────────────────
-    Route::get('services',              [ServiceController::class, 'index']);
-    Route::post('services',             [ServiceController::class, 'store']);
-    Route::put('services/{service}',    [ServiceController::class, 'update']);
-    Route::delete('services/{service}', [ServiceController::class, 'destroy']);
+    Route::get('services', [ServiceController::class, 'index']);
+    Route::post('services', [ServiceController::class, 'store']);
+    Route::put('services/{id}', [ServiceController::class, 'update']);
+    Route::delete('services/{id}', [ServiceController::class, 'destroy']);
 
     // ── Citas ─────────────────────────────────────────────────
-    Route::get('appointments',                              [AppointmentController::class, 'index']);
-    Route::post('appointments',                             [AppointmentController::class, 'store']);
-    Route::patch('appointments/{appointment}/status',       [AppointmentController::class, 'updateStatus']);
-    Route::delete('appointments/{appointment}',             [AppointmentController::class, 'destroy']);
+    Route::get('appointments', [AppointmentController::class, 'index']);
+    Route::post('appointments', [AppointmentController::class, 'store']);
+    //Pendiente Route::put('appointments/{id}', [AppointmentController::class, 'update']);
+    Route::patch('appointments/{id}/status', [AppointmentController::class, 'updateStatus']);
+    Route::delete('appointments/{id}', [AppointmentController::class, 'destroy']);
 
     // ── Pagos ─────────────────────────────────────────────────
-    Route::get('payments',      [PaymentController::class, 'index']);
-    Route::post('payments',     [PaymentController::class, 'store']);
+    Route::get('payments', [PaymentController::class, 'index']);
+    Route::post('payments', [PaymentController::class, 'store']);
 
     // ── Gastos ────────────────────────────────────────────────
-    Route::get('expenses',              [ExpenseController::class, 'index']);
-    Route::post('expenses',             [ExpenseController::class, 'store']);
-    Route::delete('expenses/{expense}', [ExpenseController::class, 'destroy']);
+    Route::get('expenses', [ExpenseController::class, 'index']);
+    Route::post('expenses', [ExpenseController::class, 'store']);
+    Route::delete('expenses/{id}', [ExpenseController::class, 'destroy']);
 
     // ── Reporte financiero ────────────────────────────────────
-    Route::get('financial/summary',     [FinancialController::class, 'summary']);
+    Route::get('financial/summary', [FinancialController::class, 'summary']);
 });
 </file>
 
@@ -5971,14 +6424,12 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 use App\Services\AuthService;
-use App\Services\LoggerService;
 use App\Services\ApiResponse;
 
 class AuthController extends Controller
 {
     public function __construct(
         private AuthService $service, 
-        private LoggerService $loggerService, 
         private ApiResponse $apiResponse
         ) {}
 
@@ -5988,7 +6439,6 @@ class AuthController extends Controller
             return $this->apiResponse->error('No tienes permiso para crear usuarios.', Response::HTTP_FORBIDDEN);
         
         $user = $this->service->create($request->validated());
-        $this->loggerService->userCreatedByAdmin($user);
         return $this->apiResponse->success(
             new UserResource($user),
             'usuario creado con contraseña por defecto ' . User::DEFAULT_PASSWORD . '.',
@@ -6004,8 +6454,6 @@ class AuthController extends Controller
 
         $user = $result['user'];
 
-        $this->loggerService->userLoggedIn($user);
-
         return $this->apiResponse->tokenResponse(
             new UserResource($user),
             $result['token'],
@@ -6018,7 +6466,6 @@ class AuthController extends Controller
         $user = $request->user();
 
         $this->service->logout($user);
-        $this->loggerService->userLoggedOut($user);
 
         return $this->apiResponse->success(null, 'Cierre de sesión exitoso.', Response::HTTP_OK);
     }
@@ -6031,8 +6478,6 @@ class AuthController extends Controller
 
         if (!$result['success'])
             return $this->apiResponse->error($result['message'], $result['code']);
-        
-        $this->loggerService->userChangedPassword($user);
 
         return $this->apiResponse->success(null, 'Contraseña actualizada correctamente. Por favor, inicie sesión de nuevo.', Response::HTTP_OK);
     }
