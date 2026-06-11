@@ -11,43 +11,35 @@ class AppointmentService
 {
     public function create(array $data): Appointment
     {
-        // 1. Cargar servicios seleccionados
-        $services   = Service::whereIn('id', $data['service_ids'])->get();
-        $totalMin   = $services->sum('duration_min');
+        $services = Service::whereIn('id', $data['service_ids'])->get();
+        $totalMin = $services->sum('duration_min');
         $totalPrice = $services->sum('price');
 
-        // 2. Calcular end_time automáticamente
-        $start   = Carbon::parse($data['start_time']);
-        $endTime = $start->copy()->addMinutes($totalMin)->format('H:i');
+        $startTime = $data['start_time'];
+        $endTime = Carbon::parse($startTime)->addMinutes($totalMin)->format('H:i:s');
 
-        // 3. Verificar que el barbero esté disponible en ese horario
-        $conflict = Appointment::forBarber($data['barber_id'])
-            ->forDate($data['appointment_date'])
-            ->active()
-            ->where(function ($q) use ($data, $endTime) {
-                $q->whereBetween('start_time', [$data['start_time'], $endTime])
-                  ->orWhereBetween('end_time',  [$data['start_time'], $endTime]);
-            })->exists();
+        $this->assertNoConflict(
+            barberId: $data['barber_id'],
+            date: $data['appointment_date'],
+            startTime: $startTime,
+            endTime: $endTime,
+            excludeId: null,
+        );
 
-        if ($conflict) {
-            throw new \Exception('El barbero no está disponible en ese horario.');
-        }
-
-        // 4. Crear todo en una transacción (si algo falla, se revierte todo)
-        return DB::transaction(function () use ($data, $services, $endTime, $totalPrice) {
+        return DB::transaction(function () use ($data, $services, $startTime, $endTime, $totalPrice) {
             $appointment = Appointment::create([
-                'client_id'        => $data['client_id'],
-                'barber_id'        => $data['barber_id'],
-                'receptionist_id'  => auth()->id(),
+                'client_id' => $data['client_id'],
+                'barber_id' => $data['barber_id'],
+                'receptionist_id' => auth()->id(),
                 'appointment_date' => $data['appointment_date'],
-                'start_time'       => $data['start_time'],
-                'end_time'         => $endTime,
-                'notes'            => $data['notes'] ?? null,
-                'total_price'      => $totalPrice,
-                'status'           => 'pending',
+                'start_time' => $startTime,
+                'end_time' => $endTime,
+                'notes' => $data['notes'] ?? null,
+                'total_price' => $totalPrice,
+                'status' => 'pending',
             ]);
 
-            // 5. Adjuntar servicios con el precio histórico del momento
+            // Adjuntar servicios con el precio histórico del momento
             $pivot = $services->mapWithKeys(
                 fn($s) => [$s->id => ['price_at_time' => $s->price]]
             )->toArray();
@@ -60,39 +52,36 @@ class AppointmentService
 
     public function update(Appointment $appointment, array $data): Appointment
     {
-        // Solo se pueden actualizar ciertos campos
-        $appointment->update([
-            'barber_id'        => $data['barber_id'] ?? $appointment->barber_id,
-            'appointment_date' => $data['appointment_date'] ?? $appointment->appointment_date,
-            'start_time'       => $data['start_time'] ?? $appointment->start_time,
-            'notes'            => $data['notes'] ?? $appointment->notes,
-        ]);
+        $rescheduling = isset($data['barber_id'])
+            || isset($data['appointment_date'])
+            || isset($data['start_time']);
 
-        // Si se actualizó el horario o el barbero, recalcular end_time y verificar conflictos
-        if (isset($data['barber_id']) || isset($data['appointment_date']) || isset($data['start_time'])) {
-            $services   = $appointment->services;
-            $totalMin   = $services->sum('duration_min');
-            $endTime    = Carbon::parse($appointment->start_time)->addMinutes($totalMin)->format('H:i');
+        // Calcular end_time con los datos actualizados ANTES de persistir nada.
+        if ($rescheduling) {
+            $barberId = $data['barber_id'] ?? $appointment->barber_id;
+            $date = $data['appointment_date'] ?? $appointment->appointment_date;
+            $startTime = $data['start_time'] ?? $appointment->start_time;
+            $totalMin = $appointment->services->sum('duration_min');
+            $endTime = Carbon::parse($startTime)->addMinutes($totalMin)->format('H:i:s');
 
-            // Verificar conflictos con el nuevo horario/barbero
-            $conflict = Appointment::forBarber($appointment->barber_id)
-                ->forDate($appointment->appointment_date)
-                ->active()
-                ->where('id', '!=', $appointment->id)
-                ->where(function ($q) use ($appointment, $endTime) {
-                    $q->whereBetween('start_time', [$appointment->start_time, $endTime])
-                      ->orWhereBetween('end_time',  [$appointment->start_time, $endTime]);
-                })->exists();
-
-            if ($conflict) {
-                throw new \Exception('El barbero no está disponible en ese horario.');
-            }
-
-            // Actualizar end_time si cambió el horario o el barbero
-            if (isset($data['barber_id']) || isset($data['appointment_date']) || isset($data['start_time'])) {
-                $appointment->update(['end_time' => $endTime]);
-            }
+            // Verificar conflictos antes de tocar la base de datos.
+            $this->assertNoConflict(
+                barberId: $barberId,
+                date: $date,
+                startTime: $startTime,
+                endTime: $endTime,
+                excludeId: $appointment->id,
+            );
         }
+
+        // Solo actualizamos una vez, incluyendo end_time si corresponde.
+        $appointment->update(array_filter([
+            'barber_id' => $data['barber_id'] ?? null,
+            'appointment_date' => $data['appointment_date'] ?? null,
+            'start_time' => $data['start_time'] ?? null,
+            'end_time' => $rescheduling ? $endTime : null,
+            'notes' => array_key_exists('notes', $data) ? $data['notes'] : null,
+        ], fn($v) => $v !== null));
 
         return $appointment->fresh(['client', 'barber', 'services']);
     }
@@ -100,15 +89,48 @@ class AppointmentService
     public function updateStatus(Appointment $appointment, string $status): Appointment
     {
         $appointment->update(['status' => $status]);
+
         return $appointment->fresh(['client', 'barber', 'services']);
     }
 
     public function getAll(array $filters = [])
     {
         return Appointment::with(['client', 'barber', 'services', 'payment'])
-            ->when($filters['date']      ?? null, fn($q, $d)  => $q->forDate($d))
+            ->when($filters['date'] ?? null, fn($q, $d) => $q->forDate($d))
             ->when($filters['barber_id'] ?? null, fn($q, $id) => $q->forBarber($id))
-            ->when($filters['status']    ?? null, fn($q, $s)  => $q->where('status', $s))
+            ->when($filters['status'] ?? null, fn($q, $s) => $q->where('status', $s))
             ->paginate(10);
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers privados
+    // -------------------------------------------------------------------------
+
+    /**
+     * Lanza una excepción si existe alguna cita activa del barbero que se
+     * solape con el rango [startTime, endTime] en la fecha indicada.
+     *
+     * Dos rangos [A,B] y [C,D] se solapan cuando: A < D && C < B
+     * (el inicio de uno es anterior al fin del otro, y viceversa).
+     * Esto cubre solapamiento parcial, contenido y envolvente.
+     */
+    private function assertNoConflict(
+        int $barberId,
+        string $date,
+        string $startTime,
+        string $endTime,
+        ?int $excludeId,
+    ): void {
+        $conflict = Appointment::forBarber($barberId)
+            ->forDate($date)
+            ->active()
+            ->when($excludeId, fn($q) => $q->where('id', '!=', $excludeId))
+            ->where('start_time', '<', $endTime)   // la existente empieza antes de que termine la nueva
+            ->where('end_time', '>', $startTime)  // la existente termina después de que empiece la nueva
+            ->exists();
+
+        if ($conflict) {
+            throw new \Exception('El barbero no está disponible en ese horario.');
+        }
     }
 }
