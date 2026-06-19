@@ -12,7 +12,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('services', function (Blueprint $table) {
-            //
+            $table->string('icon')->nullable()->default('cut')->after('name');
         });
     }
 
@@ -21,8 +21,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('services', function (Blueprint $table) {
-            $table->string('icon')->nullable()->default('cut')->after('name');
-        });
+        Schema::dropIfExists('services');
     }
 };
