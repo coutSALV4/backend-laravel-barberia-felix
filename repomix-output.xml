@@ -55,9 +55,12 @@ app/Http/Controllers/ServiceController.php
 app/Http/Controllers/UserController.php
 app/Http/Requests/Appointment/StoreAppointmentRequest.php
 app/Http/Requests/Appointment/UpdateAppointmentRequest.php
+app/Http/Requests/Auth/ForgotPasswordRequest.php
 app/Http/Requests/Auth/LoginRequest.php
 app/Http/Requests/Auth/PasswordRequest.php
+app/Http/Requests/Auth/ResetPasswordRequest.php
 app/Http/Requests/Auth/UserRequest.php
+app/Http/Requests/Auth/VerifyResetCodeRequest.php
 app/Http/Requests/Expense/StoreExpenseRequest.php
 app/Http/Requests/Payment/StorePaymentRequest.php
 app/Http/Requests/Service/StoreServiceRequest.php
@@ -69,9 +72,11 @@ app/Http/Resources/UserResource.php
 app/Models/Appointment.php
 app/Models/Expense.php
 app/Models/ExpenseCategory.php
+app/Models/PasswordResetCode.php
 app/Models/Payment.php
 app/Models/Service.php
 app/Models/User.php
+app/Notifications/ResetPasswordCodeNotification.php
 app/Policies/AppointmentPolicy.php
 app/Policies/UserPolicy.php
 app/Providers/AppServiceProvider.php
@@ -120,6 +125,7 @@ database/migrations/2026_05_30_020727_delete_media_table.php
 database/migrations/2026_05_30_030811_delete_expenses_table.php
 database/migrations/2026_05_30_030917_create_expenses_table.php
 database/migrations/2026_06_19_114158_add_icon_to_services_table.php
+database/migrations/2026_08_07_234152_create_password_reset_codes_table.php
 database/seeders/AdminUserSeeder.php
 database/seeders/DatabaseSeeder.php
 database/seeders/ExpenseCategorySeeder.php
@@ -568,6 +574,38 @@ class UpdateAppointmentRequest extends FormRequest
 }
 </file>
 
+<file path="app/Http/Requests/Auth/ForgotPasswordRequest.php">
+<?php
+
+namespace App\Http\Requests\Auth;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Contracts\Validation\Validator;
+use Illuminate\Http\Exceptions\HttpResponseException;
+
+class ForgotPasswordRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'email' => ['required', 'string', 'email'],
+        ];
+    }
+
+    protected function failedValidation(Validator $validator): never
+    {
+        throw new HttpResponseException(
+            response()->json(['errors' => $validator->errors()], 422)
+        );
+    }
+}
+</file>
+
 <file path="app/Http/Requests/Auth/LoginRequest.php">
 <?php
 
@@ -627,6 +665,78 @@ class PasswordRequest extends FormRequest
                 'regex:/[0-9]/',
                 'regex:/[@$!%*#?&]/',
             ],
+        ];
+    }
+
+    protected function failedValidation(Validator $validator): never
+    {
+        throw new HttpResponseException(
+            response()->json(['errors' => $validator->errors()], 422)
+        );
+    }
+}
+</file>
+
+<file path="app/Http/Requests/Auth/ResetPasswordRequest.php">
+<?php
+
+namespace App\Http\Requests\Auth;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Contracts\Validation\Validator;
+use Illuminate\Http\Exceptions\HttpResponseException;
+
+class ResetPasswordRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'email'    => ['required', 'string', 'email'],
+            'code'     => ['required', 'string', 'size:6'],
+            'password' => [
+                'required', 'string', 'min:8', 'confirmed',
+                'regex:/[A-Z]/',
+                'regex:/[0-9]/',
+                'regex:/[@$!%*#?&]/',
+            ],
+        ];
+    }
+
+    protected function failedValidation(Validator $validator): never
+    {
+        throw new HttpResponseException(
+            response()->json(['errors' => $validator->errors()], 422)
+        );
+    }
+}
+</file>
+
+<file path="app/Http/Requests/Auth/VerifyResetCodeRequest.php">
+<?php
+
+namespace App\Http\Requests\Auth;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Contracts\Validation\Validator;
+use Illuminate\Http\Exceptions\HttpResponseException;
+
+class VerifyResetCodeRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'email' => ['required', 'string', 'email'],
+            'code'  => ['required', 'string', 'size:6'],
         ];
     }
 
@@ -932,6 +1042,23 @@ class ExpenseCategory extends Model
 }
 </file>
 
+<file path="app/Models/PasswordResetCode.php">
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class PasswordResetCode extends Model
+{
+    protected $fillable = ['email', 'code', 'attempts', 'expires_at'];
+
+    protected $casts = [
+        'expires_at' => 'datetime',
+    ];
+}
+</file>
+
 <file path="app/Models/Payment.php">
 <?php
 
@@ -968,6 +1095,38 @@ class Payment extends Model
     public function receivedBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'received_by');
+    }
+}
+</file>
+
+<file path="app/Notifications/ResetPasswordCodeNotification.php">
+<?php
+
+namespace App\Notifications;
+
+use Illuminate\Bus\Queueable;
+use Illuminate\Notifications\Notification;
+use Illuminate\Notifications\Messages\MailMessage;
+
+class ResetPasswordCodeNotification extends Notification
+{
+    use Queueable;
+
+    public function __construct(public string $code) {}
+
+    public function via($notifiable): array
+    {
+        return ['mail'];
+    }
+
+    public function toMail($notifiable): MailMessage
+    {
+        return (new MailMessage)
+            ->subject('Tu código para restablecer tu contraseña')
+            ->line('Usa el siguiente código para restablecer tu contraseña en la app:')
+            ->line("**{$this->code}**")
+            ->line('Este código expira en 10 minutos.')
+            ->line('Si no solicitaste este cambio, ignora este mensaje.');
     }
 }
 </file>
@@ -1125,106 +1284,6 @@ class ApiResponse
             'must_change_password'=> $mustChangePassword,
             'user'                => $user,
         ]);
-    }
-}
-</file>
-
-<file path="app/Services/AuthService.php">
-<?php
-
-namespace App\Services;
-
-use App\Models\User;
-use App\Services\ApiResponse;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\RateLimiter;
-use Symfony\Component\HttpFoundation\Response;
-
-class AuthService
-{
-    public function create(array $data): User
-    {
-        return User::create($data + ['password' => User::DEFAULT_PASSWORD]);
-    }
-
-    public function attemptLogin(array $credentials, string $ip): array
-    {
-        $key = 'login:' . $ip;
-
-        if (RateLimiter::tooManyAttempts($key, 5)) {
-            $seconds = RateLimiter::availableIn($key);
-            return [
-                'success' => false,
-                'message' => "Demasiados intentos de inicio de sesión. Inténtalo de nuevo en {$seconds} segundos.",
-                'code'    => Response::HTTP_TOO_MANY_REQUESTS,
-            ];
-        }
-
-        if (!Auth::attempt($credentials)) {
-            RateLimiter::hit($key, 60);
-            return [
-                'success' => false,
-                'message' => 'Credenciales inválidas.',
-                'code'    => Response::HTTP_UNAUTHORIZED,
-            ];
-        }
-
-        RateLimiter::clear($key);
-
-        /** @var User $user */
-        $user = Auth::user();
-
-        // Revocar tokens anteriores para sesión única
-        $user->tokens()->delete();
-
-        $token = $user->createToken(
-            'auth_token',
-            $this->abilitiesForRole($user->role)
-        )->plainTextToken;
-
-        return [
-            'success'             => true,
-            'user'                => $user,
-            'token'               => $token,
-            'must_change_password'=> (bool) $user->must_change_password,
-        ];
-    }
-
-    public function logout(User $user): void
-    {
-        $user->currentAccessToken()->delete();
-    }
-
-    public function changePassword(User $user, string $currentPassword, string $newPassword): array
-    {
-        if (!Hash::check($currentPassword, $user->password)) {
-            return [
-                'success' => false,
-                'message' => 'La contraseña actual es incorrecta.',
-                'code'    => Response::HTTP_UNAUTHORIZED,
-            ];
-        }
-
-        $user->update([
-            'password'             => Hash::make($newPassword),
-            'must_change_password' => false,
-        ]);
-
-        $user->tokens()->delete();
-
-        return ['success' => true];
-    }
-    
-    private function abilitiesForRole(string $role): array
-    {
-        return match ($role) {
-            'admin'        => ['*'],
-            'barber'       => ['appointments:read', 'appointments:write', 'clients:read'],
-            'receptionist' => ['appointments:read', 'appointments:write', 'clients:read', 'clients:write'],
-            'client'       => ['appointments:read', 'appointments:create'],
-            default        => [],
-        };
     }
 }
 </file>
@@ -3405,6 +3464,33 @@ return new class extends Migration {
 };
 </file>
 
+<file path="database/migrations/2026_08_07_234152_create_password_reset_codes_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration {
+    public function up(): void
+    {
+        Schema::create('password_reset_codes', function (Blueprint $table) {
+            $table->id();
+            $table->string('email')->unique();
+            $table->string('code');           // hash del código
+            $table->unsignedTinyInteger('attempts')->default(0);
+            $table->timestamp('expires_at');
+            $table->timestamps();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('password_reset_codes');
+    }
+};
+</file>
+
 <file path="database/seeders/AdminUserSeeder.php">
 <?php
 
@@ -4789,46 +4875,6 @@ class UserResource extends JsonResource
 }
 </file>
 
-<file path="app/Models/Service.php">
-<?php
-
-namespace App\Models;
-
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
-use Illuminate\Database\Eloquent\SoftDeletes;
-
-class Service extends Model
-{
-    use SoftDeletes;
-
-    protected $fillable = [
-        'name',
-        'description',
-        'price',
-        'duration_min',
-        'active',
-    ];
-
-    protected $casts = [
-        'price'  => 'decimal:2',
-        'active' => 'boolean',
-    ];
-
-    public function appointments(): BelongsToMany
-    {
-        return $this->belongsToMany(Appointment::class, 'appointment_services')
-                    ->withPivot('price_at_time');
-    }
-
-    // Solo servicios activos para agendar
-    public function scopeActive($query)
-    {
-        return $query->where('active', true);
-    }
-}
-</file>
-
 <file path="app/Providers/AppServiceProvider.php">
 <?php
 
@@ -4994,6 +5040,197 @@ class AppointmentService
         if ($conflict) {
             throw new \Exception('El barbero no está disponible en ese horario.');
         }
+    }
+}
+</file>
+
+<file path="app/Services/AuthService.php">
+<?php
+
+namespace App\Services;
+
+use App\Models\User;
+use App\Services\ApiResponse;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\RateLimiter;
+use Symfony\Component\HttpFoundation\Response;
+use App\Models\PasswordResetCode;
+use Illuminate\Support\Str;
+
+
+class AuthService
+{
+    public function create(array $data): User
+    {
+        return User::create($data + ['password' => User::DEFAULT_PASSWORD]);
+    }
+
+    public function attemptLogin(array $credentials, string $ip): array
+    {
+        $key = 'login:' . $ip;
+
+        if (RateLimiter::tooManyAttempts($key, 5)) {
+            $seconds = RateLimiter::availableIn($key);
+            return [
+                'success' => false,
+                'message' => "Demasiados intentos de inicio de sesión. Inténtalo de nuevo en {$seconds} segundos.",
+                'code' => Response::HTTP_TOO_MANY_REQUESTS,
+            ];
+        }
+
+        if (!Auth::attempt($credentials)) {
+            RateLimiter::hit($key, 60);
+            return [
+                'success' => false,
+                'message' => 'Credenciales inválidas.',
+                'code' => Response::HTTP_UNAUTHORIZED,
+            ];
+        }
+
+        RateLimiter::clear($key);
+
+        /** @var User $user */
+        $user = Auth::user();
+
+        // Revocar tokens anteriores para sesión única
+        $user->tokens()->delete();
+
+        $token = $user->createToken(
+            'auth_token',
+            $this->abilitiesForRole($user->role)
+        )->plainTextToken;
+
+        return [
+            'success' => true,
+            'user' => $user,
+            'token' => $token,
+            'must_change_password' => (bool) $user->must_change_password,
+        ];
+    }
+
+    public function logout(User $user): void
+    {
+        $user->currentAccessToken()->delete();
+    }
+
+    public function changePassword(User $user, string $currentPassword, string $newPassword): array
+    {
+        if (!Hash::check($currentPassword, $user->password)) {
+            return [
+                'success' => false,
+                'message' => 'La contraseña actual es incorrecta.',
+                'code' => Response::HTTP_UNAUTHORIZED,
+            ];
+        }
+
+        $user->update([
+            'password' => Hash::make($newPassword),
+            'must_change_password' => false,
+        ]);
+
+        $user->tokens()->delete();
+
+        return ['success' => true];
+    }
+
+    private function abilitiesForRole(string $role): array
+    {
+        return match ($role) {
+            'admin' => ['*'],
+            'barber' => ['appointments:read', 'appointments:write', 'clients:read'],
+            'receptionist' => ['appointments:read', 'appointments:write', 'clients:read', 'clients:write'],
+            'client' => ['appointments:read', 'appointments:create'],
+            default => [],
+        };
+    }
+
+    public function sendResetCode(string $email): array
+    {
+        $user = User::where('email', $email)->first();
+
+        // Respuesta genérica sin importar si el correo existe, para no filtrar qué correos están registrados
+        $genericResponse = [
+            'success' => true,
+            'message' => 'Si el correo está registrado, recibirás un código de verificación.',
+        ];
+
+        if (!$user) {
+            return $genericResponse;
+        }
+
+        $existing = PasswordResetCode::where('email', $email)->first();
+
+        // Evita reenviar un código nuevo si el anterior tiene menos de 60 segundos
+        if ($existing && $existing->created_at->gt(now()->subSeconds(60))) {
+            return $genericResponse;
+        }
+
+        $code = (string) random_int(100000, 999999);
+
+        PasswordResetCode::updateOrCreate(
+            ['email' => $email],
+            [
+                'code' => Hash::make($code),
+                'attempts' => 0,
+                'expires_at' => now()->addMinutes(10),
+            ]
+        );
+
+        $user->notify(new \App\Notifications\ResetPasswordCodeNotification($code));
+
+        return $genericResponse;
+    }
+
+    public function verifyResetCode(string $email, string $code): array
+    {
+        $record = PasswordResetCode::where('email', $email)->first();
+
+        if (!$record) {
+            return ['success' => false, 'message' => 'Código inválido o expirado.'];
+        }
+
+        if ($record->expires_at->isPast()) {
+            $record->delete();
+            return ['success' => false, 'message' => 'El código ha expirado. Solicita uno nuevo.'];
+        }
+
+        if ($record->attempts >= 5) {
+            $record->delete();
+            return ['success' => false, 'message' => 'Demasiados intentos. Solicita un nuevo código.'];
+        }
+
+        if (!Hash::check($code, $record->code)) {
+            $record->increment('attempts');
+            return ['success' => false, 'message' => 'Código incorrecto.'];
+        }
+
+        return ['success' => true, 'message' => 'Código válido.'];
+    }
+
+    public function resetPasswordWithCode(string $email, string $code, string $newPassword): array
+    {
+        $verification = $this->verifyResetCode($email, $code);
+
+        if (!$verification['success']) {
+            return $verification;
+        }
+
+        $user = User::where('email', $email)->first();
+
+        $user->update([
+            'password' => Hash::make($newPassword),
+            'must_change_password' => false,
+        ]);
+
+        $user->tokens()->delete(); // cierra sesiones activas de Sanctum
+
+        PasswordResetCode::where('email', $email)->delete();
+
+        return [
+            'success' => true,
+            'message' => 'Contraseña restablecida exitosamente. Inicia sesión de nuevo.',
+        ];
     }
 }
 </file>
@@ -5258,6 +5495,47 @@ class UserRequest extends FormRequest
         throw new HttpResponseException(
             response()->json(['errors' => $validator->errors()], 422)
         );
+    }
+}
+</file>
+
+<file path="app/Models/Service.php">
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
+
+class Service extends Model
+{
+    use SoftDeletes;
+
+    protected $fillable = [
+        'name',
+        'icon',
+        'description',
+        'price',
+        'duration_min',
+        'active',
+    ];
+
+    protected $casts = [
+        'price'  => 'decimal:2',
+        'active' => 'boolean',
+    ];
+
+    public function appointments(): BelongsToMany
+    {
+        return $this->belongsToMany(Appointment::class, 'appointment_services')
+                    ->withPivot('price_at_time');
+    }
+
+    // Solo servicios activos para agendar
+    public function scopeActive($query)
+    {
+        return $query->where('active', true);
     }
 }
 </file>
@@ -6427,6 +6705,11 @@ use App\Http\Controllers\FinancialController;
 
 Route::post('login', [AuthController::class, 'login']);
 
+// ── Password reset routes ────────────────────────────────────────────────────────────────────────────
+Route::post('forgot-password', [AuthController::class, 'forgotPassword'])->middleware('throttle:6,1');
+Route::post('verify-reset-code', [AuthController::class, 'verifyResetCode'])->middleware('throttle:10,1');
+Route::post('reset-password', [AuthController::class, 'resetPassword'])->middleware('throttle:6,1');
+
 Route::middleware('auth:sanctum')->group(function () {
 
     // ── Auth ──────────────────────────────────────────────────
@@ -6481,19 +6764,23 @@ use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 use App\Services\AuthService;
 use App\Services\ApiResponse;
+use App\Http\Requests\Auth\ForgotPasswordRequest;
+use App\Http\Requests\Auth\VerifyResetCodeRequest;
+use App\Http\Requests\Auth\ResetPasswordRequest;
 
 class AuthController extends Controller
 {
     public function __construct(
-        private AuthService $service, 
+        private AuthService $service,
         private ApiResponse $apiResponse
-        ) {}
+    ) {
+    }
 
     public function register(UserRequest $request): JsonResponse
     {
-        if (!auth()->check() || auth()->user()->role !== 'admin') 
+        if (!auth()->check() || auth()->user()->role !== 'admin')
             return $this->apiResponse->error('No tienes permiso para crear usuarios.', Response::HTTP_FORBIDDEN);
-        
+
         $user = $this->service->create($request->validated());
         return $this->apiResponse->success(
             new UserResource($user),
@@ -6505,7 +6792,7 @@ class AuthController extends Controller
     public function login(LoginRequest $request): JsonResponse
     {
         $result = $this->service->attemptLogin($request->only('email', 'password'), $request->ip());
-        if (!$result['success']) 
+        if (!$result['success'])
             return $this->apiResponse->error($result['message'], $result['code']);
 
         $user = $result['user'];
@@ -6536,6 +6823,35 @@ class AuthController extends Controller
             return $this->apiResponse->error($result['message'], $result['code']);
 
         return $this->apiResponse->success(null, 'Contraseña actualizada correctamente. Por favor, inicie sesión de nuevo.', Response::HTTP_OK);
+    }
+
+    public function forgotPassword(ForgotPasswordRequest $request): JsonResponse
+    {
+        $result = $this->service->sendResetCode($request->email);
+
+        return $this->apiResponse->success(null, $result['message'], Response::HTTP_OK);
+    }
+
+    public function verifyResetCode(VerifyResetCodeRequest $request): JsonResponse
+    {
+        $result = $this->service->verifyResetCode($request->email, $request->code);
+
+        return $result['success']
+            ? $this->apiResponse->success(null, $result['message'], Response::HTTP_OK)
+            : $this->apiResponse->error($result['message'], Response::HTTP_UNPROCESSABLE_ENTITY);
+    }
+
+    public function resetPassword(ResetPasswordRequest $request): JsonResponse
+    {
+        $result = $this->service->resetPasswordWithCode(
+            $request->email,
+            $request->code,
+            $request->password
+        );
+
+        return $result['success']
+            ? $this->apiResponse->success(null, $result['message'], Response::HTTP_OK)
+            : $this->apiResponse->error($result['message'], Response::HTTP_UNPROCESSABLE_ENTITY);
     }
 }
 </file>
