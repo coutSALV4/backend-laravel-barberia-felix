@@ -16,7 +16,7 @@ Authorization: Bearer {token}
 - [Pagos](#pagos)
 - [Gastos](#gastos)
 - [Reporte Financiero](#reporte-financiero)
-- [Recuperar Contrasena](#recuperar-contrasena)
+- [Recuperar Contraseña](#recuperar-contraseña)
 
 ---
 
