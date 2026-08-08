@@ -119,6 +119,7 @@ database/migrations/2026_05_22_045938_create_expenses_table.php
 database/migrations/2026_05_30_020727_delete_media_table.php
 database/migrations/2026_05_30_030811_delete_expenses_table.php
 database/migrations/2026_05_30_030917_create_expenses_table.php
+database/migrations/2026_06_19_114158_add_icon_to_services_table.php
 database/seeders/AdminUserSeeder.php
 database/seeders/DatabaseSeeder.php
 database/seeders/ExpenseCategorySeeder.php
@@ -709,42 +710,6 @@ class StorePaymentRequest extends FormRequest
 }
 </file>
 
-<file path="app/Http/Requests/Service/StoreServiceRequest.php">
-<?php
-
-namespace App\Http\Requests\Service;
-
-use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Contracts\Validation\Validator;
-use Illuminate\Http\Exceptions\HttpResponseException;
-
-class StoreServiceRequest extends FormRequest
-{
-    public function authorize(): bool
-    {
-        return true;
-    }
-
-    public function rules(): array
-    {
-        return [
-            'name'         => ['required', 'string', 'max:255'],
-            'description'  => ['nullable', 'string'],
-            'price'        => ['required', 'numeric', 'min:0.01'],
-            'duration_min' => ['required', 'integer', 'min:1', 'max:480'],
-            'active'       => ['sometimes', 'boolean'],
-        ];
-    }
-
-    protected function failedValidation(Validator $validator): never
-    {
-        throw new HttpResponseException(
-            response()->json(['errors' => $validator->errors()], 422)
-        );
-    }
-}
-</file>
-
 <file path="app/Http/Resources/AppointmentResource.php">
 <?php
 
@@ -823,34 +788,6 @@ class PaymentResource extends JsonResource
             'reference'   => $this->reference,
             'paid_at'     => $this->paid_at?->toDateTimeString(),
             'received_by' => UserResource::make($this->whenLoaded('receivedBy')),
-        ];
-    }
-}
-</file>
-
-<file path="app/Http/Resources/ServiceResource.php">
-<?php
-
-namespace App\Http\Resources;
-
-use Illuminate\Http\Resources\Json\JsonResource;
-use Illuminate\Http\Request;
-
-class ServiceResource extends JsonResource
-{
-    public function toArray(Request $request): array
-    {
-        return [
-            'id'           => $this->id,
-            'name'         => $this->name,
-            'description'  => $this->description,
-            'price'        => (float) $this->price,
-            'duration_min' => $this->duration_min,
-            'active'       => $this->active,
-            'price_at_time' => $this->whenPivotLoaded(
-                'appointment_services',
-                fn() => (float) $this->pivot->price_at_time
-            ),
         ];
     }
 }
@@ -1188,123 +1125,6 @@ class ApiResponse
             'must_change_password'=> $mustChangePassword,
             'user'                => $user,
         ]);
-    }
-}
-</file>
-
-<file path="app/Services/AppointmentService.php">
-<?php
-
-namespace App\Services;
-
-use App\Models\Appointment;
-use App\Models\Service;
-use Carbon\Carbon;
-use Illuminate\Support\Facades\DB;
-
-class AppointmentService
-{
-    public function create(array $data): Appointment
-    {
-        // 1. Cargar servicios seleccionados
-        $services   = Service::whereIn('id', $data['service_ids'])->get();
-        $totalMin   = $services->sum('duration_min');
-        $totalPrice = $services->sum('price');
-
-        // 2. Calcular end_time automáticamente
-        $start   = Carbon::parse($data['start_time']);
-        $endTime = $start->copy()->addMinutes($totalMin)->format('H:i');
-
-        // 3. Verificar que el barbero esté disponible en ese horario
-        $conflict = Appointment::forBarber($data['barber_id'])
-            ->forDate($data['appointment_date'])
-            ->active()
-            ->where(function ($q) use ($data, $endTime) {
-                $q->whereBetween('start_time', [$data['start_time'], $endTime])
-                  ->orWhereBetween('end_time',  [$data['start_time'], $endTime]);
-            })->exists();
-
-        if ($conflict) {
-            throw new \Exception('El barbero no está disponible en ese horario.');
-        }
-
-        // 4. Crear todo en una transacción (si algo falla, se revierte todo)
-        return DB::transaction(function () use ($data, $services, $endTime, $totalPrice) {
-            $appointment = Appointment::create([
-                'client_id'        => $data['client_id'],
-                'barber_id'        => $data['barber_id'],
-                'receptionist_id'  => auth()->id(),
-                'appointment_date' => $data['appointment_date'],
-                'start_time'       => $data['start_time'],
-                'end_time'         => $endTime,
-                'notes'            => $data['notes'] ?? null,
-                'total_price'      => $totalPrice,
-                'status'           => 'pending',
-            ]);
-
-            // 5. Adjuntar servicios con el precio histórico del momento
-            $pivot = $services->mapWithKeys(
-                fn($s) => [$s->id => ['price_at_time' => $s->price]]
-            )->toArray();
-
-            $appointment->services()->attach($pivot);
-
-            return $appointment->load('client', 'barber', 'services');
-        });
-    }
-
-    public function update(Appointment $appointment, array $data): Appointment
-    {
-        // Solo se pueden actualizar ciertos campos
-        $appointment->update([
-            'barber_id'        => $data['barber_id'] ?? $appointment->barber_id,
-            'appointment_date' => $data['appointment_date'] ?? $appointment->appointment_date,
-            'start_time'       => $data['start_time'] ?? $appointment->start_time,
-            'notes'            => $data['notes'] ?? $appointment->notes,
-        ]);
-
-        // Si se actualizó el horario o el barbero, recalcular end_time y verificar conflictos
-        if (isset($data['barber_id']) || isset($data['appointment_date']) || isset($data['start_time'])) {
-            $services   = $appointment->services;
-            $totalMin   = $services->sum('duration_min');
-            $endTime    = Carbon::parse($appointment->start_time)->addMinutes($totalMin)->format('H:i');
-
-            // Verificar conflictos con el nuevo horario/barbero
-            $conflict = Appointment::forBarber($appointment->barber_id)
-                ->forDate($appointment->appointment_date)
-                ->active()
-                ->where('id', '!=', $appointment->id)
-                ->where(function ($q) use ($appointment, $endTime) {
-                    $q->whereBetween('start_time', [$appointment->start_time, $endTime])
-                      ->orWhereBetween('end_time',  [$appointment->start_time, $endTime]);
-                })->exists();
-
-            if ($conflict) {
-                throw new \Exception('El barbero no está disponible en ese horario.');
-            }
-
-            // Actualizar end_time si cambió el horario o el barbero
-            if (isset($data['barber_id']) || isset($data['appointment_date']) || isset($data['start_time'])) {
-                $appointment->update(['end_time' => $endTime]);
-            }
-        }
-
-        return $appointment->fresh(['client', 'barber', 'services']);
-    }
-
-    public function updateStatus(Appointment $appointment, string $status): Appointment
-    {
-        $appointment->update(['status' => $status]);
-        return $appointment->fresh(['client', 'barber', 'services']);
-    }
-
-    public function getAll(array $filters = [])
-    {
-        return Appointment::with(['client', 'barber', 'services', 'payment'])
-            ->when($filters['date']      ?? null, fn($q, $d)  => $q->forDate($d))
-            ->when($filters['barber_id'] ?? null, fn($q, $id) => $q->forBarber($id))
-            ->when($filters['status']    ?? null, fn($q, $s)  => $q->where('status', $s))
-            ->paginate(10);
     }
 }
 </file>
@@ -3643,37 +3463,6 @@ class ExpenseCategorySeeder extends Seeder
 }
 </file>
 
-<file path="database/seeders/ServiceSeeder.php">
-<?php
-
-namespace Database\Seeders;
-
-use App\Models\Service;
-use Illuminate\Database\Seeder;
-
-class ServiceSeeder extends Seeder
-{
-    public function run(): void
-    {
-        $services = [
-            ['name' => 'Corte clásico',     'description' => 'Corte de cabello estilo clásico.',         'price' => 120.00, 'duration_min' => 30],
-            ['name' => 'Corte moderno',      'description' => 'Corte con técnicas actuales.',              'price' => 150.00, 'duration_min' => 40],
-            ['name' => 'Arreglo de barba',   'description' => 'Perfilado y arreglo de barba.',             'price' => 80.00,  'duration_min' => 20],
-            ['name' => 'Corte + barba',      'description' => 'Corte de cabello más arreglo de barba.',    'price' => 180.00, 'duration_min' => 50],
-            ['name' => 'Rasurado clásico',   'description' => 'Rasurado con navaja estilo barbería.',      'price' => 100.00, 'duration_min' => 25],
-            ['name' => 'Tinte',              'description' => 'Aplicación de color en cabello.',           'price' => 250.00, 'duration_min' => 60],
-        ];
-
-        foreach ($services as $service) {
-            Service::firstOrCreate(
-                ['name' => $service['name']],
-                array_merge($service, ['active' => true])
-            );
-        }
-    }
-}
-</file>
-
 <file path="lang/en/auth.php">
 <?php
 
@@ -4910,6 +4699,72 @@ class UserController extends Controller
 }
 </file>
 
+<file path="app/Http/Requests/Service/StoreServiceRequest.php">
+<?php
+
+namespace App\Http\Requests\Service;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Contracts\Validation\Validator;
+use Illuminate\Http\Exceptions\HttpResponseException;
+
+class StoreServiceRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    public function rules(): array
+    {
+        return [
+            'name'         => ['required', 'string', 'max:255'],
+            'icon'         => ['nullable', 'string', 'max:255'],
+            'description'  => ['nullable', 'string'],
+            'price'        => ['required', 'numeric', 'min:0.01'],
+            'duration_min' => ['required', 'integer', 'min:1', 'max:480'],
+            'active'       => ['sometimes', 'boolean'],
+        ];
+    }
+
+    protected function failedValidation(Validator $validator): never
+    {
+        throw new HttpResponseException(
+            response()->json(['errors' => $validator->errors()], 422)
+        );
+    }
+}
+</file>
+
+<file path="app/Http/Resources/ServiceResource.php">
+<?php
+
+namespace App\Http\Resources;
+
+use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Http\Request;
+
+class ServiceResource extends JsonResource
+{
+    public function toArray(Request $request): array
+    {
+        return [
+            'id'           => $this->id,
+            'icon'         => $this->icon,
+            'name'         => $this->name,
+            'description'  => $this->description,
+            'price'        => (float) $this->price,
+            'duration_min' => $this->duration_min,
+            'active'       => $this->active,
+            'price_at_time' => $this->whenPivotLoaded(
+                'appointment_services',
+                fn() => (float) $this->pivot->price_at_time
+            ),
+        ];
+    }
+}
+</file>
+
 <file path="app/Http/Resources/UserResource.php">
 <?php
 
@@ -5000,6 +4855,145 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->registerPolicies();
+    }
+}
+</file>
+
+<file path="app/Services/AppointmentService.php">
+<?php
+
+namespace App\Services;
+
+use App\Models\Appointment;
+use App\Models\Service;
+use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
+
+class AppointmentService
+{
+    public function create(array $data): Appointment
+    {
+        $services = Service::whereIn('id', $data['service_ids'])->get();
+        $totalMin = $services->sum('duration_min');
+        $totalPrice = $services->sum('price');
+
+        $startTime = $data['start_time'];
+        $endTime = Carbon::parse($startTime)->addMinutes($totalMin)->format('H:i:s');
+
+        $this->assertNoConflict(
+            barberId: $data['barber_id'],
+            date: $data['appointment_date'],
+            startTime: $startTime,
+            endTime: $endTime,
+            excludeId: null,
+        );
+
+        return DB::transaction(function () use ($data, $services, $startTime, $endTime, $totalPrice) {
+            $appointment = Appointment::create([
+                'client_id' => $data['client_id'],
+                'barber_id' => $data['barber_id'],
+                'receptionist_id' => auth()->id(),
+                'appointment_date' => $data['appointment_date'],
+                'start_time' => $startTime,
+                'end_time' => $endTime,
+                'notes' => $data['notes'] ?? null,
+                'total_price' => $totalPrice,
+                'status' => 'pending',
+            ]);
+
+            // Adjuntar servicios con el precio histórico del momento
+            $pivot = $services->mapWithKeys(
+                fn($s) => [$s->id => ['price_at_time' => $s->price]]
+            )->toArray();
+
+            $appointment->services()->attach($pivot);
+
+            return $appointment->load('client', 'barber', 'services');
+        });
+    }
+
+    public function update(Appointment $appointment, array $data): Appointment
+    {
+        $rescheduling = isset($data['barber_id'])
+            || isset($data['appointment_date'])
+            || isset($data['start_time']);
+
+        // Calcular end_time con los datos actualizados ANTES de persistir nada.
+        if ($rescheduling) {
+            $barberId = $data['barber_id'] ?? $appointment->barber_id;
+            $date = $data['appointment_date'] ?? $appointment->appointment_date;
+            $startTime = $data['start_time'] ?? $appointment->start_time;
+            $totalMin = $appointment->services->sum('duration_min');
+            $endTime = Carbon::parse($startTime)->addMinutes($totalMin)->format('H:i:s');
+
+            // Verificar conflictos antes de tocar la base de datos.
+            $this->assertNoConflict(
+                barberId: $barberId,
+                date: $date,
+                startTime: $startTime,
+                endTime: $endTime,
+                excludeId: $appointment->id,
+            );
+        }
+
+        // Solo actualizamos una vez, incluyendo end_time si corresponde.
+        $appointment->update(array_filter([
+            'barber_id' => $data['barber_id'] ?? null,
+            'appointment_date' => $data['appointment_date'] ?? null,
+            'start_time' => $data['start_time'] ?? null,
+            'end_time' => $rescheduling ? $endTime : null,
+            'notes' => array_key_exists('notes', $data) ? $data['notes'] : null,
+        ], fn($v) => $v !== null));
+
+        return $appointment->fresh(['client', 'barber', 'services']);
+    }
+
+    public function updateStatus(Appointment $appointment, string $status): Appointment
+    {
+        $appointment->update(['status' => $status]);
+
+        return $appointment->fresh(['client', 'barber', 'services']);
+    }
+
+    public function getAll(array $filters = [])
+    {
+        return Appointment::with(['client', 'barber', 'services', 'payment'])
+            ->when($filters['date'] ?? null, fn($q, $d) => $q->forDate($d))
+            ->when($filters['barber_id'] ?? null, fn($q, $id) => $q->forBarber($id))
+            ->when($filters['status'] ?? null, fn($q, $s) => $q->where('status', $s))
+            ->paginate(10);
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers privados
+    // -------------------------------------------------------------------------
+
+    /**
+     * Lanza una excepción si existe alguna cita activa del barbero que se
+     * solape con el rango [startTime, endTime] en la fecha indicada.
+     *
+     * Dos rangos [A,B] y [C,D] se solapan cuando: A < D && C < B
+     * (el inicio de uno es anterior al fin del otro, y viceversa).
+     * Esto cubre solapamiento parcial, contenido y envolvente.
+     */
+    private function assertNoConflict(
+        int $barberId,
+        string $date,
+        string $startTime,
+        string $endTime,
+        ?int $excludeId,
+    ): void {
+        $conflict = Appointment::forBarber($barberId)
+            ->forDate($date)
+            ->active()
+            ->when($excludeId, fn($q) => $q->where('id', '!=', $excludeId))
+            ->where('start_time', '<', $endTime)   // la existente empieza antes de que termine la nueva
+            ->where('end_time', '>', $startTime)  // la existente termina después de que empiece la nueva
+            ->exists();
+
+        if ($conflict) {
+            throw new \Exception('El barbero no está disponible en ese horario.');
+        }
     }
 }
 </file>
@@ -5131,6 +5125,37 @@ class UserService
 }
 </file>
 
+<file path="database/migrations/2026_06_19_114158_add_icon_to_services_table.php">
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    /**
+     * Run the migrations.
+     */
+    public function up(): void
+    {
+        Schema::table('services', function (Blueprint $table) {
+            $table->string('icon')->nullable()->after('name');
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::table('services', function (Blueprint $table) {
+            $table->dropColumn('icon');
+        });
+    }
+};
+</file>
+
 <file path="database/seeders/DatabaseSeeder.php">
 <?php
 
@@ -5150,6 +5175,37 @@ class DatabaseSeeder extends Seeder
             ServiceSeeder::class,
             ExpenseCategorySeeder::class,
         ]);
+    }
+}
+</file>
+
+<file path="database/seeders/ServiceSeeder.php">
+<?php
+
+namespace Database\Seeders;
+
+use App\Models\Service;
+use Illuminate\Database\Seeder;
+
+class ServiceSeeder extends Seeder
+{
+    public function run(): void
+    {
+        $services = [
+            ['name' => 'Corte clásico', 'icon' => 'cut',     'description' => 'Corte de cabello estilo clásico.',         'price' => 120.00, 'duration_min' => 30],
+            ['name' => 'Corte moderno', 'icon' => 'cut',      'description' => 'Corte con técnicas actuales.',              'price' => 150.00, 'duration_min' => 40],
+            ['name' => 'Arreglo de barba', 'icon' => 'scissors',   'description' => 'Perfilado y arreglo de barba.',             'price' => 80.00,  'duration_min' => 20],
+            ['name' => 'Corte + barba', 'icon' => 'cut',      'description' => 'Corte de cabello más arreglo de barba.',    'price' => 180.00, 'duration_min' => 50],
+            ['name' => 'Rasurado clásico', 'icon' => 'razor',   'description' => 'Rasurado con navaja estilo barbería.',      'price' => 100.00, 'duration_min' => 25],
+            ['name' => 'Tinte',              'icon' => 'paint-brush',              'description' => 'Aplicación de color en cabello.',           'price' => 250.00, 'duration_min' => 60],
+        ];
+
+        foreach ($services as $service) {
+            Service::firstOrCreate(
+                ['name' => $service['name']],
+                array_merge($service, ['active' => true])
+            );
+        }
     }
 }
 </file>
