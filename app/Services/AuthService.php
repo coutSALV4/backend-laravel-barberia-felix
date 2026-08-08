@@ -8,6 +8,9 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\RateLimiter;
 use Symfony\Component\HttpFoundation\Response;
+use App\Models\PasswordResetCode;
+use Illuminate\Support\Str;
+
 
 class AuthService
 {
@@ -25,7 +28,7 @@ class AuthService
             return [
                 'success' => false,
                 'message' => "Demasiados intentos de inicio de sesión. Inténtalo de nuevo en {$seconds} segundos.",
-                'code'    => Response::HTTP_TOO_MANY_REQUESTS,
+                'code' => Response::HTTP_TOO_MANY_REQUESTS,
             ];
         }
 
@@ -34,7 +37,7 @@ class AuthService
             return [
                 'success' => false,
                 'message' => 'Credenciales inválidas.',
-                'code'    => Response::HTTP_UNAUTHORIZED,
+                'code' => Response::HTTP_UNAUTHORIZED,
             ];
         }
 
@@ -52,10 +55,10 @@ class AuthService
         )->plainTextToken;
 
         return [
-            'success'             => true,
-            'user'                => $user,
-            'token'               => $token,
-            'must_change_password'=> (bool) $user->must_change_password,
+            'success' => true,
+            'user' => $user,
+            'token' => $token,
+            'must_change_password' => (bool) $user->must_change_password,
         ];
     }
 
@@ -70,12 +73,12 @@ class AuthService
             return [
                 'success' => false,
                 'message' => 'La contraseña actual es incorrecta.',
-                'code'    => Response::HTTP_UNAUTHORIZED,
+                'code' => Response::HTTP_UNAUTHORIZED,
             ];
         }
 
         $user->update([
-            'password'             => Hash::make($newPassword),
+            'password' => Hash::make($newPassword),
             'must_change_password' => false,
         ]);
 
@@ -83,15 +86,103 @@ class AuthService
 
         return ['success' => true];
     }
-    
+
     private function abilitiesForRole(string $role): array
     {
         return match ($role) {
-            'admin'        => ['*'],
-            'barber'       => ['appointments:read', 'appointments:write', 'clients:read'],
+            'admin' => ['*'],
+            'barber' => ['appointments:read', 'appointments:write', 'clients:read'],
             'receptionist' => ['appointments:read', 'appointments:write', 'clients:read', 'clients:write'],
-            'client'       => ['appointments:read', 'appointments:create'],
-            default        => [],
+            'client' => ['appointments:read', 'appointments:create'],
+            default => [],
         };
+    }
+
+    public function sendResetCode(string $email): array
+    {
+        $user = User::where('email', $email)->first();
+
+        // Respuesta genérica sin importar si el correo existe, para no filtrar qué correos están registrados
+        $genericResponse = [
+            'success' => true,
+            'message' => 'Si el correo está registrado, recibirás un código de verificación.',
+        ];
+
+        if (!$user) {
+            return $genericResponse;
+        }
+
+        $existing = PasswordResetCode::where('email', $email)->first();
+
+        // Evita reenviar un código nuevo si el anterior tiene menos de 60 segundos
+        if ($existing && $existing->created_at->gt(now()->subSeconds(60))) {
+            return $genericResponse;
+        }
+
+        $code = (string) random_int(100000, 999999);
+
+        PasswordResetCode::updateOrCreate(
+            ['email' => $email],
+            [
+                'code' => Hash::make($code),
+                'attempts' => 0,
+                'expires_at' => now()->addMinutes(10),
+            ]
+        );
+
+        $user->notify(new \App\Notifications\ResetPasswordCodeNotification($code));
+
+        return $genericResponse;
+    }
+
+    public function verifyResetCode(string $email, string $code): array
+    {
+        $record = PasswordResetCode::where('email', $email)->first();
+
+        if (!$record) {
+            return ['success' => false, 'message' => 'Código inválido o expirado.'];
+        }
+
+        if ($record->expires_at->isPast()) {
+            $record->delete();
+            return ['success' => false, 'message' => 'El código ha expirado. Solicita uno nuevo.'];
+        }
+
+        if ($record->attempts >= 5) {
+            $record->delete();
+            return ['success' => false, 'message' => 'Demasiados intentos. Solicita un nuevo código.'];
+        }
+
+        if (!Hash::check($code, $record->code)) {
+            $record->increment('attempts');
+            return ['success' => false, 'message' => 'Código incorrecto.'];
+        }
+
+        return ['success' => true, 'message' => 'Código válido.'];
+    }
+
+    public function resetPasswordWithCode(string $email, string $code, string $newPassword): array
+    {
+        $verification = $this->verifyResetCode($email, $code);
+
+        if (!$verification['success']) {
+            return $verification;
+        }
+
+        $user = User::where('email', $email)->first();
+
+        $user->update([
+            'password' => Hash::make($newPassword),
+            'must_change_password' => false,
+        ]);
+
+        $user->tokens()->delete(); // cierra sesiones activas de Sanctum
+
+        PasswordResetCode::where('email', $email)->delete();
+
+        return [
+            'success' => true,
+            'message' => 'Contraseña restablecida exitosamente. Inicia sesión de nuevo.',
+        ];
     }
 }
