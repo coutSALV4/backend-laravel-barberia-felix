@@ -11,6 +11,11 @@ use App\Http\Controllers\FinancialController;
 
 Route::post('login', [AuthController::class, 'login']);
 
+// ── Password reset routes ────────────────────────────────────────────────────────────────────────────
+Route::post('forgot-password', [AuthController::class, 'forgotPassword'])->middleware('throttle:6,1');
+Route::post('verify-reset-code', [AuthController::class, 'verifyResetCode'])->middleware('throttle:10,1');
+Route::post('reset-password', [AuthController::class, 'resetPassword'])->middleware('throttle:6,1');
+
 Route::middleware('auth:sanctum')->group(function () {
 
     // ── Auth ──────────────────────────────────────────────────
