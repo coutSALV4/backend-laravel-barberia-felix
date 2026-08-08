@@ -12,19 +12,23 @@ use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 use App\Services\AuthService;
 use App\Services\ApiResponse;
+use App\Http\Requests\Auth\ForgotPasswordRequest;
+use App\Http\Requests\Auth\VerifyResetCodeRequest;
+use App\Http\Requests\Auth\ResetPasswordRequest;
 
 class AuthController extends Controller
 {
     public function __construct(
-        private AuthService $service, 
+        private AuthService $service,
         private ApiResponse $apiResponse
-        ) {}
+    ) {
+    }
 
     public function register(UserRequest $request): JsonResponse
     {
-        if (!auth()->check() || auth()->user()->role !== 'admin') 
+        if (!auth()->check() || auth()->user()->role !== 'admin')
             return $this->apiResponse->error('No tienes permiso para crear usuarios.', Response::HTTP_FORBIDDEN);
-        
+
         $user = $this->service->create($request->validated());
         return $this->apiResponse->success(
             new UserResource($user),
@@ -36,7 +40,7 @@ class AuthController extends Controller
     public function login(LoginRequest $request): JsonResponse
     {
         $result = $this->service->attemptLogin($request->only('email', 'password'), $request->ip());
-        if (!$result['success']) 
+        if (!$result['success'])
             return $this->apiResponse->error($result['message'], $result['code']);
 
         $user = $result['user'];
@@ -67,5 +71,34 @@ class AuthController extends Controller
             return $this->apiResponse->error($result['message'], $result['code']);
 
         return $this->apiResponse->success(null, 'Contraseña actualizada correctamente. Por favor, inicie sesión de nuevo.', Response::HTTP_OK);
+    }
+
+    public function forgotPassword(ForgotPasswordRequest $request): JsonResponse
+    {
+        $result = $this->service->sendResetCode($request->email);
+
+        return $this->apiResponse->success(null, $result['message'], Response::HTTP_OK);
+    }
+
+    public function verifyResetCode(VerifyResetCodeRequest $request): JsonResponse
+    {
+        $result = $this->service->verifyResetCode($request->email, $request->code);
+
+        return $result['success']
+            ? $this->apiResponse->success(null, $result['message'], Response::HTTP_OK)
+            : $this->apiResponse->error($result['message'], Response::HTTP_UNPROCESSABLE_ENTITY);
+    }
+
+    public function resetPassword(ResetPasswordRequest $request): JsonResponse
+    {
+        $result = $this->service->resetPasswordWithCode(
+            $request->email,
+            $request->code,
+            $request->password
+        );
+
+        return $result['success']
+            ? $this->apiResponse->success(null, $result['message'], Response::HTTP_OK)
+            : $this->apiResponse->error($result['message'], Response::HTTP_UNPROCESSABLE_ENTITY);
     }
 }
