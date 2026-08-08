@@ -16,6 +16,7 @@ Authorization: Bearer {token}
 - [Pagos](#pagos)
 - [Gastos](#gastos)
 - [Reporte Financiero](#reporte-financiero)
+- [Recuperar Contrasena](#recuperar-contrasena)
 
 ---
 
@@ -963,3 +964,139 @@ Authorization: Bearer {token}
 | 401    | No enviaste el token                             |
 | 403    | No eres admin                                    |
 | 422    | Faltan los parámetros `from` / `to` o son inválidos |
+
+## Recuperar Contraseña
+
+Estas rutas **no requieren token** (son públicas), ya que están pensadas para usuarios que no pueden iniciar sesión. Todas están protegidas con **rate limiting** para evitar abuso.
+
+---
+
+### 1. Solicitar código de recuperación
+
+```
+POST /forgot-password
+```
+
+> Límite: 6 peticiones por minuto por IP.
+
+**Body:**
+```json
+{
+    "email": "juan@email.com"
+}
+```
+
+> Por seguridad, la respuesta es **siempre la misma** (código 200 y mensaje genérico), sin importar si el correo está registrado o no. Así se evita revelar qué correos existen en el sistema.
+> Si ya se generó un código para ese correo hace menos de 60 segundos, no se envía uno nuevo (para evitar spam), pero la respuesta sigue siendo la misma.
+> El código generado tiene 6 dígitos, se guarda hasheado y expira en 10 minutos.
+
+**Respuesta exitosa — 200:**
+```json
+{
+    "success": true,
+    "message": "Si el correo está registrado, recibirás un código de verificación.",
+    "data": null
+}
+```
+
+**Errores posibles:**
+| Código | Motivo                                  |
+|--------|------------------------------------------|
+| 422    | Falta el campo `email` o no es válido     |
+| 429    | Demasiadas peticiones, espera un momento  |
+
+---
+
+### 2. Verificar código
+
+```
+POST /verify-reset-code
+```
+
+> Límite: 10 peticiones por minuto por IP.
+
+**Body:**
+```json
+{
+    "email": "juan@email.com",
+    "code": "123456"
+}
+```
+
+> `code` debe tener exactamente 6 caracteres.
+> Permite validar el código **antes** de pedirle al usuario la nueva contraseña (por ejemplo, para avanzar de pantalla en la app).
+> Después de 5 intentos fallidos, el código se invalida y hay que solicitar uno nuevo con `/forgot-password`.
+
+**Respuesta exitosa — 200:**
+```json
+{
+    "success": true,
+    "message": "Código válido.",
+    "data": null
+}
+```
+
+**Errores posibles:**
+| Código | Motivo                                                        |
+|--------|-----------------------------------------------------------------|
+| 422    | Código inválido o expirado                                       |
+| 422    | El código ha expirado, hay que solicitar uno nuevo               |
+| 422    | Demasiados intentos, hay que solicitar un nuevo código           |
+| 422    | Código incorrecto                                                 |
+| 422    | Falta `email` o `code`, o `code` no tiene 6 caracteres            |
+| 429    | Demasiadas peticiones, espera un momento                         |
+
+---
+
+### 3. Restablecer contraseña
+
+```
+POST /reset-password
+```
+
+> Límite: 6 peticiones por minuto por IP.
+
+**Body:**
+```json
+{
+    "email": "juan@email.com",
+    "code": "123456",
+    "password": "NuevoPass1!",
+    "password_confirmation": "NuevoPass1!"
+}
+```
+
+> `code` debe tener exactamente 6 caracteres y ser el código enviado al correo.
+> `password` debe tener mínimo 8 caracteres, una mayúscula, un número y un carácter especial (`@$!%*#?&`).
+> `password_confirmation` debe ser idéntico a `password`.
+> Internamente se vuelve a validar el código (misma lógica que `/verify-reset-code`) antes de actualizar la contraseña.
+> Al completarse, se elimina el código usado, se desactiva `must_change_password` y se cierran todas las sesiones activas del usuario (se borran sus tokens de Sanctum).
+
+**Respuesta exitosa — 200:**
+```json
+{
+    "success": true,
+    "message": "Contraseña restablecida exitosamente. Inicia sesión de nuevo.",
+    "data": null
+}
+```
+
+**Errores posibles:**
+| Código | Motivo                                                                      |
+|--------|-------------------------------------------------------------------------------|
+| 422    | Código inválido, expirado, incorrecto o con demasiados intentos fallidos      |
+| 422    | La nueva contraseña no cumple los requisitos o la confirmación no coincide    |
+| 422    | Falta algún campo obligatorio (`email`, `code`, `password`)                   |
+| 429    | Demasiadas peticiones, espera un momento                                      |
+
+---
+
+### Flujo general de recuperación
+
+```
+1. Usuario solicita código → POST /forgot-password
+2. (Opcional) Verificar el código antes de pedir la nueva contraseña → POST /verify-reset-code
+3. Usuario envía código + nueva contraseña → POST /reset-password
+4. Se cierran todas las sesiones activas del usuario
+5. Usuario inicia sesión de nuevo con la nueva contraseña → POST /login
+```
