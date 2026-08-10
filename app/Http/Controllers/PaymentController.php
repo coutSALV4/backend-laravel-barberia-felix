@@ -20,7 +20,7 @@ class PaymentController extends Controller
     public function index(Request $request): JsonResponse
     {
         $payments = $this->service->getAll(
-            $request->only(['appointment_id', 'status', 'method'])
+            $request->only(['appointment_id', 'status', 'method', 'from', 'to'])
         );
 
         return $this->apiResponse->success(

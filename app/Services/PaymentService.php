@@ -35,6 +35,8 @@ class PaymentService
             ->when($filters['appointment_id'] ?? null, fn($q, $id) => $q->where('appointment_id', $id))
             ->when($filters['status'] ?? null, fn($q, $s) => $q->where('status', $s))
             ->when($filters['method'] ?? null, fn($q, $m) => $q->where('method', $m))
+            ->when($filters['from'] ?? null, fn($q, $d) => $q->whereDate('paid_at', '>=', $d))
+            ->when($filters['to'] ?? null, fn($q, $d) => $q->whereDate('paid_at', '<=', $d))
             ->orderByDesc('paid_at')
             ->paginate(20);
     }

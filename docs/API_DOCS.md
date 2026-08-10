@@ -676,6 +676,8 @@ Authorization: Bearer {token}
 | `appointment_id` | int    | Filtra por cita                                   |
 | `status`         | string | Filtra por estado: `pending`, `completed`, `refunded` |
 | `method`         | string | Filtra por método: `cash`, `card`, `transfer`, `other` |
+| `from`           | date   | Fecha de inicio del rango (`YYYY-MM-DD`), sobre `paid_at` |
+| `to`             | date   | Fecha de fin del rango (`YYYY-MM-DD`), sobre `paid_at`    |
 
 **Respuesta exitosa — 200:**
 ```json
