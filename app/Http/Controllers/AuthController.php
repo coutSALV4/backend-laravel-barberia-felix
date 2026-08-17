@@ -26,7 +26,7 @@ class AuthController extends Controller
 
     public function register(UserRequest $request): JsonResponse
     {
-        if (!auth()->check() || auth()->user()->role !== 'admin')
+        if (!auth()->check() || (auth()->user()->role !== 'admin' && auth()->user()->role !== 'receptionist'))
             return $this->apiResponse->error('No tienes permiso para crear usuarios.', Response::HTTP_FORBIDDEN);
 
         $user = $this->service->create($request->validated());
